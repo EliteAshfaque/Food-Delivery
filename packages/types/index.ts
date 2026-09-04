@@ -24,9 +24,7 @@ export interface HealthCheckResponse{
 export interface JwtPayload{
     sub:string 
     email:string
-    role:string
-     
-
+    role:UserRole
 }
 
 export interface  Restaurant{
@@ -93,4 +91,41 @@ export interface OrderItem {
     quantity: number;
     unitPrice: string;
     createdAt: Date;
+}
+
+export interface Order {
+    id: string;
+    customerId: string;
+    restaurantId: string;
+    driverId: string | null;
+    status: OrderStatus;
+    totalAmount: string;
+    deliveryAddress: string;
+    deliveryLatitude: number | null;
+    deliveryLongitude: number | null;
+    stripePaymentIntentId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+export interface Review {
+    id: string;
+    customerId: string;
+    restaurantId: string;
+    orderId: string;
+    driverId: string | null;
+    restaurantRating: number;
+    driverRating: number | null;
+    comment: string | null;
+    createdAt: Date;
+}
+
+export interface RestaurantReview {
+    id: string;
+    restaurantRating: number;
+    driverRating: number | null;
+    comment: string | null;
+    createdAt: Date;
+    customerFirstName: string;
+    customerLastName: string;
 }

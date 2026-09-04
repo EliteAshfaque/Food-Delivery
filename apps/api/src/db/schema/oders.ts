@@ -5,6 +5,7 @@ import {
   timestamp,
   uuid,
   numeric,
+  doublePrecision,
 } from 'drizzle-orm/pg-core';
 import { menuItems } from './menu';
 import { restaurants } from './resturent';
@@ -33,6 +34,8 @@ export const orders = pgTable('orders', {
   status: orderStatusEnum('status').notNull().default('PENDING'),
   totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull(),
   deliveryAddress: text('delivery_address').notNull(),
+  deliveryLatitude: doublePrecision('delivery_latitude'),
+  deliveryLongitude: doublePrecision('delivery_longitude'),
   stripePaymentIntentId: text('stripe_payment_intent_id'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

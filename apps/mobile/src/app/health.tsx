@@ -24,13 +24,13 @@ export default function HomeScreen() {
           <Text>{new Date(health.timestamp).toLocaleTimeString()}</Text>
         </View>
       )}
-      { error && (
+      {error ? (
         <View style={styleSheet.errorBox}>
           <Text style={styleSheet.errorText}>
-            Something Erro here In this one{" "}
+            {error instanceof Error ? error.message : 'Could not reach the API'}
           </Text>
         </View>
-      )}
+      ) : null}
     </View>
   );
 }

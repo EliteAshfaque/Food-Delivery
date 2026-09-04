@@ -1,26 +1,54 @@
-import { useState } from 'react';
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { useQuery } from '@tanstack/react-query';
-import { router } from 'expo-router';
-import { api } from '@/lib/axios';
-import { useDebounce } from '@/hooks/use-debounce';
-import type { Restaurant } from '@food-delivery/types';
+} from "react-native";
+import { useQuery } from "@tanstack/react-query";
+import { router } from "expo-router";
+import Animated, {
+  FadeInDown,
+  useReducedMotion,
+} from "react-native-reanimated";
+import { api } from "@/lib/axios";
+import { useDebounce } from "@/hooks/use-debounce";
+import { brand } from "@/constants/brand";
+import { WasilLogo } from "@/components/wasil-brand";
+import { WasilImage } from "@/components/wasil-image";
+import { AppIcon, type FoodIconName } from "@/components/wasil-icon-system";
+import { CategoryTile } from "@/components/wasil-ui-components";
+import type { Restaurant } from "@food-delivery/types";
 
-const CUISINE_FILTERS = ['All', 'Italian', 'Chinese', 'Indian', 'Burger', 'Pizza', 'Arabic'];
+const CUISINE_FILTERS = [
+  "All",
+  "Italian",
+  "Chinese",
+  "Indian",
+  "Burger",
+  "Pizza",
+  "Arabic",
+];
+const QUICK_CATEGORIES: {
+  filter: string;
+  icon: FoodIconName;
+  label: string;
+}[] = [
+  { label: "Arabic", filter: "Arabic", icon: "arabic" },
+  { label: "Pizza", filter: "Pizza", icon: "pizza" },
+  { label: "Burgers", filter: "Burger", icon: "burgers" },
+  { label: "Indian", filter: "Indian", icon: "indian" },
+  { label: "Asian", filter: "Chinese", icon: "asian" },
+  { label: "Italian", filter: "Italian", icon: "healthy" },
+];
 
 function formatRating(rating: number | string) {
-  const value = typeof rating === 'number' ? rating : Number.parseFloat(rating);
-  if (Number.isNaN(value) || value <= 0) return 'New';
+  const value = typeof rating === "number" ? rating : Number.parseFloat(rating);
+  if (Number.isNaN(value) || value <= 0) return "New";
   return value.toFixed(1);
 }
 
@@ -45,29 +73,47 @@ function getPlaceholderDeliveryTime(restaurantId: string) {
 }
 
 export default function CustomerHomeScreen() {
-  const [search, setSearch] = useState('');
-  const [activeFilter, setActiveFilter] = useState('All');
+  const [search, setSearch] = useState("");
+  const [activeFilter, setActiveFilter] = useState("All");
+  const [hasPlayedEntrance, setHasPlayedEntrance] = useState(false);
+  const reduceMotion = useReducedMotion();
   const debouncedSearch = useDebounce(search, 400);
 
   const querySearch =
-    activeFilter !== 'All' && !debouncedSearch.trim()
+    activeFilter !== "All" && !debouncedSearch.trim()
       ? activeFilter
       : debouncedSearch.trim() || undefined;
 
-  const { data: restaurants = [], isLoading, isFetching } = useQuery<Restaurant[]>({
-    queryKey: ['restaurants', querySearch ?? ''],
+  const {
+    data: restaurants = [],
+    isLoading,
+    isFetching,
+  } = useQuery<Restaurant[]>({
+    queryKey: ["restaurants", querySearch ?? ""],
     queryFn: () =>
       api
-        .get<Restaurant[]>('/restaurants', {
+        .get<Restaurant[]>("/restaurants", {
           params: querySearch ? { search: querySearch } : undefined,
         })
         .then((res) => res.data),
   });
 
+  useEffect(() => {
+    if (hasPlayedEntrance || restaurants.length === 0) return;
+
+    const settled = setTimeout(() => setHasPlayedEntrance(true), 720);
+    return () => clearTimeout(settled);
+  }, [hasPlayedEntrance, restaurants.length]);
+
+  const homeEntrance = (delay: number, duration = 320) =>
+    hasPlayedEntrance || reduceMotion
+      ? undefined
+      : FadeInDown.duration(duration).delay(delay);
+
   function handleFilterPress(filter: string) {
     setActiveFilter(filter);
-    if (filter === 'All') {
-      setSearch('');
+    if (filter === "All") {
+      setSearch("");
       return;
     }
     setSearch(filter);
@@ -75,7 +121,7 @@ export default function CustomerHomeScreen() {
 
   function openRestaurant(id: string) {
     router.push({
-      pathname: '/(customer)/(index)/restaurant/[id]',
+      pathname: "/(customer)/(index)/restaurant/[id]",
       params: { id },
     });
   }
@@ -89,125 +135,254 @@ export default function CustomerHomeScreen() {
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={styles.greeting}>Good evening 👋</Text>
-            <Text style={styles.heading}>What are you craving?</Text>
-            <Text style={styles.subheading}>Discover open restaurants near you</Text>
+            <Animated.View entering={homeEntrance(30, 280)}>
+              <View style={styles.topBar}>
+                <WasilLogo size={38} />
+                <View style={styles.deliveryLocation}>
+                  <AppIcon
+                    name="location"
+                    size="sm"
+                    color={brand.colors.light.primary}
+                  />
+                  <View>
+                    <Text style={styles.deliveryOverline}>DELIVERING TO</Text>
+                    <Text style={styles.deliveryLabel}>Your saved address</Text>
+                  </View>
+                </View>
+              </View>
+            </Animated.View>
 
-            <View style={styles.searchWrap}>
-              <Text style={styles.searchIcon}>🔍</Text>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search restaurants or cuisine..."
-                placeholderTextColor="#999"
-                value={search}
-                onChangeText={(text) => {
-                  setSearch(text);
-                  if (activeFilter !== 'All' && text !== activeFilter) {
-                    setActiveFilter('All');
-                  }
-                }}
-                clearButtonMode="while-editing"
-              />
-              {isFetching && !isLoading ? (
-                <ActivityIndicator size="small" color="#FF6B35" style={styles.searchSpinner} />
-              ) : null}
-            </View>
+            <Animated.View entering={homeEntrance(80, 300)}>
+              <Text style={styles.greeting}>Good evening</Text>
+              <Text style={styles.heading}>What are you craving?</Text>
+              <Text style={styles.subheading}>
+                The best open kitchens, all in one place.
+              </Text>
+            </Animated.View>
 
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.filtersRow}>
-              {CUISINE_FILTERS.map((filter) => {
-                const active = activeFilter === filter;
-                return (
-                  <Pressable
-                    key={filter}
-                    style={[styles.filterChip, active && styles.filterChipActive]}
-                    onPress={() => handleFilterPress(filter)}>
-                    <Text style={[styles.filterText, active && styles.filterTextActive]}>
-                      {filter}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+            <Animated.View entering={homeEntrance(130, 320)}>
+              <View style={styles.searchWrap}>
+                <AppIcon
+                  name="search"
+                  size="sm"
+                  color={brand.colors.light.inkMuted}
+                />
+                <TextInput
+                  accessibilityLabel="Search restaurants or cuisine"
+                  style={styles.searchInput}
+                  placeholder="Search restaurants or cuisine..."
+                  placeholderTextColor={brand.colors.light.inkMuted}
+                  value={search}
+                  onChangeText={(text) => {
+                    setSearch(text);
+                    if (activeFilter !== "All" && text !== activeFilter) {
+                      setActiveFilter("All");
+                    }
+                  }}
+                  clearButtonMode="while-editing"
+                />
+                {isFetching && !isLoading ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={brand.colors.light.primary}
+                    style={styles.searchSpinner}
+                  />
+                ) : null}
+              </View>
+            </Animated.View>
+
+            <Animated.View entering={homeEntrance(180, 340)}>
+              <View style={styles.categoryHeading}>
+                <Text style={styles.categoryTitle}>Start with a craving</Text>
+                <Text style={styles.categoryHint}>Handpicked for you</Text>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.categoryRow}
+              >
+                {QUICK_CATEGORIES.map((category) => (
+                  <CategoryTile
+                    key={category.filter}
+                    icon={category.icon}
+                    title={category.label}
+                    selected={activeFilter === category.filter}
+                    onPress={() => handleFilterPress(category.filter)}
+                  />
+                ))}
+              </ScrollView>
+            </Animated.View>
+
+            <Animated.View entering={homeEntrance(230, 360)}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.filtersRow}
+              >
+                {CUISINE_FILTERS.map((filter) => {
+                  const active = activeFilter === filter;
+                  return (
+                    <Pressable
+                      accessibilityHint="Show restaurants in this cuisine"
+                      accessibilityLabel={`${filter} cuisine`}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      key={filter}
+                      style={({ pressed }) => [
+                        styles.filterChip,
+                        active && styles.filterChipActive,
+                        pressed && styles.filterPressed,
+                      ]}
+                      onPress={() => handleFilterPress(filter)}
+                    >
+                      <Text
+                        style={[
+                          styles.filterText,
+                          active && styles.filterTextActive,
+                        ]}
+                      >
+                        {filter}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </Animated.View>
 
             <View style={styles.sectionRow}>
-              <Text style={styles.sectionTitle}>Popular near you</Text>
-              <Text style={styles.sectionCount}>{restaurants.length} open</Text>
+              <Text style={styles.sectionTitle}>Popular on Wasil</Text>
+              <Text style={styles.sectionCount}>
+                {restaurants.length} open now
+              </Text>
             </View>
           </View>
         }
-        renderItem={({ item }) => (
-          <Pressable style={styles.card} onPress={() => openRestaurant(item.id)}>
-            <View style={styles.cardImageWrap}>
-              {item.imageUrl ? (
-                <Image source={{ uri: item.imageUrl }} style={styles.cardImage} />
-              ) : (
-                <View style={styles.cardImagePlaceholder}>
-                  <Text style={styles.placeholderEmoji}>🍽️</Text>
-                </View>
-              )}
-              <View style={styles.cardOverlay} />
-            </View>
+        renderItem={({ item, index }) => (
+          <Animated.View
+            entering={
+              hasPlayedEntrance || reduceMotion || index > 3
+                ? undefined
+                : FadeInDown.duration(360).delay(280 + index * 55)
+            }
+          >
+            <Pressable
+              accessibilityHint="View restaurant and menu"
+              accessibilityLabel={`${item.name.trim() || "Local kitchen"}, ${item.cuisineType.trim() || "Open kitchen"}, ${formatRating(item.rating)} stars, ${getPlaceholderDeliveryTime(item.id)} delivery, ${item.isOpen ? "open" : "closed"}`}
+              accessibilityRole="button"
+              style={({ pressed }) => [
+                styles.card,
+                pressed && styles.cardPressed,
+              ]}
+              onPress={() => openRestaurant(item.id)}
+            >
+              <View style={styles.cardImageWrap}>
+                <WasilImage
+                  contentFit="contain"
+                  style={styles.cardImage}
+                  uri={item.imageUrl}
+                />
+              </View>
 
-            <View style={styles.cardBody}>
-              <View style={styles.cardTopRow}>
-                <Text style={styles.cardName} numberOfLines={1}>
-                  {item.name}
-                </Text>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    item.isOpen ? styles.statusOpen : styles.statusClosed,
-                  ]}>
-                  <Text
-                    style={[
-                      styles.statusText,
-                      item.isOpen ? styles.statusTextOpen : styles.statusTextClosed,
-                    ]}>
-                    {item.isOpen ? 'Open' : 'Closed'}
+              <View style={styles.cardBody}>
+                <View style={styles.cardTopRow}>
+                  <Text style={styles.cardName} numberOfLines={1}>
+                    {item.name.trim() || "Local kitchen"}
                   </Text>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      item.isOpen ? styles.statusOpen : styles.statusClosed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusText,
+                        item.isOpen
+                          ? styles.statusTextOpen
+                          : styles.statusTextClosed,
+                      ]}
+                    >
+                      {item.isOpen ? "Open" : "Closed"}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.cardCuisine}>
+                  {item.cuisineType.trim() || "Open kitchen"}
+                </Text>
+                <Text style={styles.cardAddress} numberOfLines={1}>
+                  {item.address.trim() || "Delivery available"}
+                </Text>
+
+                <View style={styles.metaRow}>
+                  <View style={styles.metaItem}>
+                    <AppIcon
+                      name="rating"
+                      size="xs"
+                      color={brand.colors.light.accent}
+                    />
+                    <Text style={styles.metaText}>
+                      {formatRating(item.rating)}
+                    </Text>
+                  </View>
+                  <Text style={styles.dot}>•</Text>
+                  <View style={styles.metaItem}>
+                    <AppIcon
+                      name="distance"
+                      size="xs"
+                      color={brand.colors.light.inkMuted}
+                    />
+                    <Text style={styles.metaText}>
+                      {getPlaceholderDistance(item.id)}
+                    </Text>
+                  </View>
+                  <Text style={styles.dot}>•</Text>
+                  <View style={styles.metaItem}>
+                    <AppIcon
+                      name="deliveryTime"
+                      size="xs"
+                      color={brand.colors.light.inkMuted}
+                    />
+                    <Text style={styles.metaText}>
+                      {getPlaceholderDeliveryTime(item.id)}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.recommendationRow}>
+                  <AppIcon
+                    name="recommended"
+                    size="xs"
+                    color={brand.colors.light.mint}
+                  />
+                  <Text style={styles.freeDelivery}>A top local pick</Text>
                 </View>
               </View>
-
-              <Text style={styles.cardCuisine}>{item.cuisineType}</Text>
-              <Text style={styles.cardAddress} numberOfLines={1}>
-                {item.address}
-              </Text>
-
-              <View style={styles.metaRow}>
-                <View style={styles.metaItem}>
-                  <Text style={styles.metaIcon}>⭐</Text>
-                  <Text style={styles.metaText}>{formatRating(item.rating)}</Text>
-                </View>
-                <Text style={styles.dot}>•</Text>
-                <View style={styles.metaItem}>
-                  <Text style={styles.metaIcon}>📍</Text>
-                  <Text style={styles.metaText}>{getPlaceholderDistance(item.id)}</Text>
-                </View>
-                <Text style={styles.dot}>•</Text>
-                <View style={styles.metaItem}>
-                  <Text style={styles.metaIcon}>🕒</Text>
-                  <Text style={styles.metaText}>{getPlaceholderDeliveryTime(item.id)}</Text>
-                </View>
-              </View>
-
-              <Text style={styles.freeDelivery}>Free delivery</Text>
-            </View>
-          </Pressable>
+            </Pressable>
+          </Animated.View>
         )}
         ListEmptyComponent={
           isLoading ? (
             <View style={styles.centered}>
-              <ActivityIndicator size="large" color="#FF6B35" />
+              <ActivityIndicator
+                size="large"
+                color={brand.colors.light.primary}
+              />
               <Text style={styles.loadingText}>Finding restaurants...</Text>
             </View>
           ) : (
             <View style={styles.centered}>
-              <Text style={styles.emptyEmoji}>🍕</Text>
+              <View style={styles.emptyIcon}>
+                <AppIcon
+                  name="restaurant"
+                  size="xl"
+                  color={brand.colors.light.primary}
+                />
+              </View>
               <Text style={styles.emptyTitle}>No restaurants found</Text>
-              <Text style={styles.emptyText}>Try another cuisine or search term</Text>
+              <Text style={styles.emptyText}>
+                Try another cuisine or search term
+              </Text>
             </View>
           )
         }
@@ -219,96 +394,145 @@ export default function CustomerHomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F8F8',
+    backgroundColor: brand.colors.light.canvas,
   },
   header: {
-    paddingTop: 8,
-    paddingBottom: 8,
+    paddingBottom: 12,
+    paddingTop: 6,
+  },
+  topBar: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 24,
+  },
+  deliveryLocation: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 6,
+    maxWidth: "47%",
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  deliveryOverline: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 0.7,
+  },
+  deliveryLabel: {
+    color: brand.colors.light.ink,
+    fontSize: 11,
+    fontWeight: "800",
   },
   greeting: {
+    color: brand.colors.light.primaryText,
     fontSize: 14,
-    color: '#FF6B35',
-    fontWeight: '600',
+    fontWeight: "800",
     marginBottom: 4,
   },
   heading: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#111',
+    fontSize: 30,
+    fontWeight: "900",
+    letterSpacing: -0.7,
+    color: brand.colors.light.ink,
     marginBottom: 4,
   },
   subheading: {
     fontSize: 15,
-    color: '#666',
-    marginBottom: 16,
+    color: brand.colors.light.inkMuted,
+    marginBottom: 18,
   },
   searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#ECECEC',
-    paddingHorizontal: 12,
-    marginBottom: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  searchIcon: {
-    fontSize: 16,
-    marginRight: 8,
+    borderColor: brand.colors.light.border,
+    gap: 9,
+    marginBottom: 21,
+    paddingHorizontal: 15,
+    ...brand.shadow,
   },
   searchInput: {
     flex: 1,
     paddingVertical: 14,
     fontSize: 15,
-    color: '#111',
+    color: brand.colors.light.ink,
   },
   searchSpinner: {
     marginLeft: 8,
   },
+  categoryHeading: {
+    alignItems: "baseline",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  categoryTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 17,
+    fontWeight: "900",
+    letterSpacing: -0.2,
+  },
+  categoryHint: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  categoryRow: {
+    gap: 14,
+    paddingBottom: 24,
+  },
   filtersRow: {
     gap: 8,
-    paddingBottom: 16,
+    paddingBottom: 20,
   },
   filterChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#fff',
+    borderRadius: brand.radius.pill,
+    backgroundColor: brand.colors.light.surface,
     borderWidth: 1,
-    borderColor: '#E8E8E8',
+    borderColor: brand.colors.light.border,
   },
   filterChipActive: {
-    backgroundColor: '#FF6B35',
-    borderColor: '#FF6B35',
+    backgroundColor: brand.colors.light.ink,
+    borderColor: brand.colors.light.ink,
+  },
+  filterPressed: {
+    opacity: 0.74,
+    transform: [{ scale: 0.97 }],
   },
   filterText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#444',
+    fontWeight: "700",
+    color: brand.colors.light.inkMuted,
   },
   filterTextActive: {
-    color: '#fff',
+    color: "#fff",
   },
   sectionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#111',
+    fontWeight: "900",
+    color: brand.colors.light.ink,
+    letterSpacing: -0.2,
   },
   sectionCount: {
     fontSize: 13,
-    color: '#888',
-    fontWeight: '600',
+    color: brand.colors.light.inkMuted,
+    fontWeight: "700",
   },
   listContent: {
     paddingHorizontal: 16,
@@ -316,80 +540,73 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   centered: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     paddingTop: 48,
     paddingHorizontal: 24,
   },
   loadingText: {
     marginTop: 12,
     fontSize: 15,
-    color: '#666',
+    color: brand.colors.light.inkMuted,
   },
-  emptyEmoji: {
-    fontSize: 40,
+  emptyIcon: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: 28,
+    height: 72,
+    justifyContent: "center",
     marginBottom: 12,
+    width: 72,
   },
   emptyTitle: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#111',
+    fontWeight: "900",
+    color: brand.colors.light.ink,
     marginBottom: 6,
   },
   emptyText: {
     fontSize: 15,
-    color: '#888',
-    textAlign: 'center',
+    color: brand.colors.light.inkMuted,
+    textAlign: "center",
   },
   card: {
-    borderRadius: 16,
-    backgroundColor: '#fff',
+    borderRadius: brand.radius.large,
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderWidth: 1,
     marginBottom: 16,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
+    overflow: "hidden",
+    ...brand.shadow,
+  },
+  cardPressed: {
+    opacity: 0.96,
+    transform: [{ scale: 0.99 }],
   },
   cardImageWrap: {
-    position: 'relative',
+    position: "relative",
   },
   cardImage: {
-    width: '100%',
-    height: 170,
-  },
-  cardImagePlaceholder: {
-    width: '100%',
-    height: 170,
-    backgroundColor: '#F0F0F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  placeholderEmoji: {
-    fontSize: 36,
-  },
-  cardOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 60,
-    backgroundColor: 'rgba(0,0,0,0.12)',
+    height: 174,
+    width: "100%",
   },
   cardBody: {
+    backgroundColor: brand.colors.light.surface,
+    elevation: 1,
     padding: 14,
+    position: "relative",
+    zIndex: 1,
   },
   metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
     marginTop: 4,
     marginBottom: 8,
   },
   metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 4,
   },
   metaIcon: {
@@ -397,26 +614,31 @@ const styles = StyleSheet.create({
   },
   metaText: {
     fontSize: 13,
-    color: '#333',
-    fontWeight: '600',
+    color: brand.colors.light.inkMuted,
+    fontWeight: "700",
+  },
+  recommendationRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 4,
   },
   freeDelivery: {
     fontSize: 12,
-    color: '#16A34A',
-    fontWeight: '600',
+    color: brand.colors.light.mint,
+    fontWeight: "800",
   },
   cardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     gap: 8,
     marginBottom: 4,
   },
   cardName: {
     flex: 1,
     fontSize: 17,
-    fontWeight: '700',
-    color: '#111',
+    fontWeight: "900",
+    color: brand.colors.light.ink,
   },
   statusBadge: {
     paddingHorizontal: 8,
@@ -424,35 +646,35 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   statusOpen: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: "#E4F6F0",
   },
   statusClosed: {
-    backgroundColor: '#FEE2E2',
+    backgroundColor: "#FDECEE",
   },
   statusText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   statusTextOpen: {
-    color: '#16A34A',
+    color: brand.colors.light.mint,
   },
   statusTextClosed: {
-    color: '#DC2626',
+    color: brand.colors.light.danger,
   },
   cardCuisine: {
     fontSize: 13,
-    color: '#FF6B35',
-    fontWeight: '600',
+    color: brand.colors.light.primaryText,
+    fontWeight: "800",
     marginBottom: 4,
   },
   cardAddress: {
     fontSize: 13,
-    color: '#777',
+    color: brand.colors.light.inkMuted,
     marginBottom: 8,
   },
   dot: {
     marginHorizontal: 6,
-    color: '#CCC',
+    color: brand.colors.light.border,
     fontSize: 12,
   },
 });

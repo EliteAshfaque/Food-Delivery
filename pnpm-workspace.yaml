@@ -6,3 +6,5 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: false
   unrs-resolver: true
+minimumReleaseAgeExclude:
+  - expo-location@57.0.16

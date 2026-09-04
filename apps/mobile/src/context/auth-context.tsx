@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import type { User, UserRole } from '@food-delivery/types';
 
 import { deleteToken, getToken, saveToken } from '../../lib/auth';
-import { api } from '../../lib/axios';
+import { api } from '@/lib/axios';
 
 interface RegisterData {
   firstName: string;

@@ -8,6 +8,10 @@ import { RestaurantsModule } from './restaurent/restaurent.module';
 import { MenuModule } from './menu/menu.module';
 import { OrdersModule } from './orders/oder.module';
 import { PaymentsModule } from './payments/payment.modules';
+import { GatewayModule } from './gateway/gateway.module';
+import { DriverModule } from './driver/driver.module';
+import { LocationModule } from './location/location.module';
+import { ReviewsModule } from './reviews/reviews.module';
 
 @Module({
   imports: [
@@ -17,10 +21,14 @@ import { PaymentsModule } from './payments/payment.modules';
     }),
     DbModule,
     AuthModule,
-    RestaurantsModule,
+    RestaurantsModule, 
     MenuModule,
+    DriverModule,
+    LocationModule,
     OrdersModule,
     PaymentsModule,
+    GatewayModule,
+    ReviewsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

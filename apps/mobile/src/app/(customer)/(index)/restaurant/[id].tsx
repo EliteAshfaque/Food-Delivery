@@ -1,35 +1,45 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
-} from 'react-native';
-import { useQuery } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
-import { api } from '@/lib/axios';
-import { useCartStore } from '@/store/cart-store';
-import type { MenuCategory, MenuItem, Restaurant } from '@food-delivery/types';
+} from "react-native";
+import { useQuery } from "@tanstack/react-query";
+import { router, useLocalSearchParams } from "expo-router";
+
+import { AppIcon } from "@/components/wasil-icon-system";
+import { WasilImage } from "@/components/wasil-image";
+import { brand } from "@/constants/brand";
+import { api } from "@/lib/axios";
+import { useCartStore } from "@/store/cart-store";
+import type {
+  MenuCategory,
+  MenuItem,
+  Restaurant,
+  RestaurantReview,
+} from "@food-delivery/types";
 
 function formatPrice(price: string | number) {
-  const value = typeof price === 'number' ? price : Number.parseFloat(price);
+  const value = typeof price === "number" ? price : Number.parseFloat(price);
   if (Number.isNaN(value)) return String(price);
   return `$${value.toFixed(2)}`;
 }
 
 function formatRating(rating: number | string) {
-  const value = typeof rating === 'number' ? rating : Number.parseFloat(rating);
-  if (Number.isNaN(value) || value <= 0) return 'New';
+  const value = typeof rating === "number" ? rating : Number.parseFloat(rating);
+  if (Number.isNaN(value) || value <= 0) return "New";
   return value.toFixed(1);
 }
 
 export default function RestaurantDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
+    null,
+  );
 
   const {
     items: cartItems,
@@ -43,21 +53,33 @@ export default function RestaurantDetailScreen() {
     totalPrice,
   } = useCartStore();
 
-  const { data: restaurant, isLoading: restaurantLoading } = useQuery<Restaurant | null>({
-    queryKey: ['restaurant', id],
-    queryFn: () => api.get(`/restaurants/${id}`).then((res) => res.data),
-    enabled: Boolean(id),
-  });
+  const { data: restaurant, isLoading: restaurantLoading } =
+    useQuery<Restaurant | null>({
+      queryKey: ["restaurant", id],
+      queryFn: () => api.get(`/restaurants/${id}`).then((res) => res.data),
+      enabled: Boolean(id),
+    });
 
-  const { data: categories = [], isLoading: categoriesLoading } = useQuery<MenuCategory[]>({
-    queryKey: ['menu-categories', id],
+  const { data: categories = [], isLoading: categoriesLoading } = useQuery<
+    MenuCategory[]
+  >({
+    queryKey: ["menu-categories", id],
     queryFn: () => api.get(`/menu/categories/${id}`).then((res) => res.data),
     enabled: Boolean(id),
   });
 
-  const { data: menuItems = [], isLoading: itemsLoading } = useQuery<MenuItem[]>({
-    queryKey: ['menu-items', id],
+  const { data: menuItems = [], isLoading: itemsLoading } = useQuery<
+    MenuItem[]
+  >({
+    queryKey: ["menu-items", id],
     queryFn: () => api.get(`/menu/items/${id}`).then((res) => res.data),
+    enabled: Boolean(id),
+  });
+
+  const { data: reviews = [] } = useQuery<RestaurantReview[]>({
+    queryKey: ["restaurant-reviews", id],
+    queryFn: () =>
+      api.get(`/reviews/restaurant/${id}`).then((res) => res.data),
     enabled: Boolean(id),
   });
 
@@ -68,21 +90,26 @@ export default function RestaurantDetailScreen() {
 
   const visibleItems = useMemo(() => {
     if (!selectedCategoryId) return availableItems;
-    return availableItems.filter((item) => item.categoryId === selectedCategoryId);
+    return availableItems.filter(
+      (item) => item.categoryId === selectedCategoryId,
+    );
   }, [availableItems, selectedCategoryId]);
 
   const groupedSections = useMemo(() => {
     if (selectedCategoryId) {
-      const category = categories.find((c) => c.id === selectedCategoryId);
-      return [{ title: category?.name ?? 'Items', data: visibleItems }];
+      const category = categories.find(
+        (item) => item.id === selectedCategoryId,
+      );
+      return [{ title: category?.name ?? "Items", data: visibleItems }];
     }
+
     return categories
       .map((category) => ({
         title: category.name,
         data: availableItems.filter((item) => item.categoryId === category.id),
       }))
       .filter((section) => section.data.length > 0);
-  }, [categories, availableItems, selectedCategoryId, visibleItems]);
+  }, [availableItems, categories, selectedCategoryId, visibleItems]);
 
   const isLoading = restaurantLoading || categoriesLoading || itemsLoading;
   const cartCount = cartRestaurantId === id ? totalItems() : 0;
@@ -107,13 +134,13 @@ export default function RestaurantDetailScreen() {
 
     if (cartRestaurantId && cartRestaurantId !== restaurant.id) {
       Alert.alert(
-        'Replace cart?',
+        "Replace cart?",
         `Your cart has items from ${cartRestaurantName}. Clear it and add from ${restaurant.name}?`,
         [
-          { text: 'Cancel', style: 'cancel' },
+          { text: "Cancel", style: "cancel" },
           {
-            text: 'Clear & Add',
-            style: 'destructive',
+            text: "Clear & add",
+            style: "destructive",
             onPress: () => {
               clearCart();
               addItem(cartItem);
@@ -127,14 +154,18 @@ export default function RestaurantDetailScreen() {
     addItem(cartItem);
   }
 
-  function goToCart() {
-    router.push('/(customer)/cart');
-  }
-
   if (isLoading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#FF6B35" />
+        <View style={styles.loadingIcon}>
+          <AppIcon
+            color={brand.colors.light.primary}
+            name="restaurant"
+            size="xl"
+          />
+        </View>
+        <ActivityIndicator color={brand.colors.light.primary} size="small" />
+        <Text style={styles.loadingText}>Setting the table…</Text>
       </View>
     );
   }
@@ -142,8 +173,26 @@ export default function RestaurantDetailScreen() {
   if (!restaurant) {
     return (
       <View style={styles.centered}>
+        <View style={styles.loadingIcon}>
+          <AppIcon
+            color={brand.colors.light.primary}
+            name="restaurant"
+            size="xl"
+          />
+        </View>
         <Text style={styles.notFoundTitle}>Restaurant not found</Text>
-        <Pressable style={styles.primaryButton} onPress={() => router.back()}>
+        <Text style={styles.notFoundText}>
+          This restaurant may no longer be available.
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.back()}
+          style={({ pressed }) => [
+            styles.primaryButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <AppIcon color="#FFFFFF" name="back" size="sm" />
           <Text style={styles.primaryButtonText}>Go back</Text>
         </Pressable>
       </View>
@@ -157,66 +206,207 @@ export default function RestaurantDetailScreen() {
           styles.scrollContent,
           cartCount > 0 && styles.scrollContentWithBar,
         ]}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.heroWrap}>
-          {restaurant.imageUrl ? (
-            <Image source={{ uri: restaurant.imageUrl }} style={styles.heroImage} />
-          ) : (
-            <View style={[styles.heroImage, styles.heroPlaceholder]}>
-              <Text style={styles.heroPlaceholderText}>🍽️</Text>
+          <WasilImage
+            accessibilityLabel={`${restaurant.name.trim() || "Local kitchen"} restaurant image`}
+            contentFit="contain"
+            style={styles.heroImage}
+            uri={restaurant.imageUrl}
+          />
+          <View style={styles.heroActions}>
+            <Pressable
+              accessibilityLabel="Go back"
+              accessibilityRole="button"
+              hitSlop={6}
+              onPress={() => router.back()}
+              style={({ pressed }) => [
+                styles.backButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <AppIcon color={brand.colors.light.ink} name="back" size="md" />
+            </Pressable>
+            <View
+              accessibilityLabel={`Rating ${formatRating(restaurant.rating)}`}
+              style={styles.ratingPill}
+            >
+              <AppIcon
+                color={brand.colors.light.accent}
+                name="rating"
+                size="xs"
+              />
+              <Text style={styles.ratingText}>
+                {formatRating(restaurant.rating)}
+              </Text>
             </View>
-          )}
-          <View style={styles.heroOverlay} />
-          <Pressable style={styles.backButton} onPress={() => router.back()}>
-            <Text style={styles.backButtonText}>←</Text>
-          </Pressable>
+          </View>
         </View>
 
         <View style={styles.infoCard}>
           <View style={styles.titleRow}>
-            <Text style={styles.title}>{restaurant.name}</Text>
+            <View style={styles.titleBlock}>
+              <Text accessibilityRole="header" style={styles.title}>
+                {restaurant.name.trim() || "Local kitchen"}
+              </Text>
+              <Text style={styles.cuisine}>
+                {restaurant.cuisineType.trim() || "Open kitchen"}
+              </Text>
+            </View>
             <View
               style={[
                 styles.statusBadge,
                 restaurant.isOpen ? styles.statusOpen : styles.statusClosed,
-              ]}>
+              ]}
+            >
+              <View
+                style={[
+                  styles.statusDot,
+                  restaurant.isOpen
+                    ? styles.statusDotOpen
+                    : styles.statusDotClosed,
+                ]}
+              />
               <Text
                 style={[
                   styles.statusText,
-                  restaurant.isOpen ? styles.statusTextOpen : styles.statusTextClosed,
-                ]}>
-                {restaurant.isOpen ? 'Open' : 'Closed'}
+                  restaurant.isOpen
+                    ? styles.statusTextOpen
+                    : styles.statusTextClosed,
+                ]}
+              >
+                {restaurant.isOpen ? "Open" : "Closed"}
               </Text>
             </View>
           </View>
 
-          <Text style={styles.cuisine}>{restaurant.cuisineType}</Text>
-          {restaurant.description ? (
-            <Text style={styles.description}>{restaurant.description}</Text>
-          ) : null}
-          <Text style={styles.address}>{restaurant.address}</Text>
+          <Text style={styles.description}>
+            {restaurant.description?.trim() ||
+              "A local favourite, delivered with care."}
+          </Text>
 
-          <View style={styles.metaRow}>
-            <Text style={styles.metaText}>⭐ {formatRating(restaurant.rating)}</Text>
-            <Text style={styles.dot}>•</Text>
-            <Text style={styles.metaText}>25-35 min</Text>
-            <Text style={styles.dot}>•</Text>
-            <Text style={styles.metaText}>Free delivery</Text>
+          <View style={styles.metaGrid}>
+            <View style={styles.metaItem}>
+              <AppIcon
+                color={brand.colors.light.primary}
+                name="deliveryTime"
+                size="sm"
+              />
+              <View>
+                <Text style={styles.metaLabel}>Delivery</Text>
+                <Text style={styles.metaValue}>25–35 min</Text>
+              </View>
+            </View>
+            <View style={styles.metaDivider} />
+            <View style={styles.metaItem}>
+              <AppIcon
+                color={brand.colors.light.mint}
+                name="deliveryLocation"
+                size="sm"
+              />
+              <View>
+                <Text style={styles.metaLabel}>Delivery fee</Text>
+                <Text style={styles.metaValue}>Free</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.addressRow}>
+            <AppIcon
+              color={brand.colors.light.inkMuted}
+              name="location"
+              size="xs"
+            />
+            <Text numberOfLines={1} style={styles.address}>
+              {restaurant.address.trim() || "Delivery available"}
+            </Text>
+          </View>
+        </View>
+
+        {reviews.length > 0 ? (
+          <View style={styles.reviewsCard}>
+            <View style={styles.reviewsHeader}>
+              <AppIcon
+                color={brand.colors.light.primary}
+                name="reviews"
+                size="sm"
+              />
+              <Text style={styles.reviewsTitle}>Customer reviews</Text>
+            </View>
+            {reviews.slice(0, 3).map((review) => (
+              <View key={review.id} style={styles.reviewItem}>
+                <View style={styles.reviewTop}>
+                  <Text style={styles.reviewName}>
+                    {review.customerFirstName} {review.customerLastName[0]}.
+                  </Text>
+                  <View style={styles.reviewRatings}>
+                    <View style={styles.reviewRating}>
+                      <AppIcon
+                        color={brand.colors.light.primary}
+                        name="restaurant"
+                        size="xs"
+                      />
+                      <Text style={styles.reviewRatingText}>
+                        {review.restaurantRating}
+                      </Text>
+                    </View>
+                    {review.driverRating ? (
+                      <View style={styles.reviewRating}>
+                        <AppIcon
+                          color={brand.colors.light.mint}
+                          name="deliveryRider"
+                          size="xs"
+                        />
+                        <Text style={styles.reviewRatingText}>
+                          {review.driverRating}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+                {review.comment ? (
+                  <Text style={styles.reviewComment}>{review.comment}</Text>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        <View style={styles.menuHeader}>
+          <View>
+            <Text style={styles.menuEyebrow}>EXPLORE THE MENU</Text>
+            <Text accessibilityRole="header" style={styles.menuHeading}>
+              Choose your favourites
+            </Text>
+          </View>
+          <View style={styles.menuCountPill}>
+            <Text style={styles.menuCount}>{availableItems.length} items</Text>
           </View>
         </View>
 
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryRow}>
+          contentContainerStyle={styles.categoryRow}
+        >
           <Pressable
-            style={[styles.categoryChip, !selectedCategoryId && styles.categoryChipActive]}
-            onPress={() => setSelectedCategoryId(null)}>
+            accessibilityLabel="All menu items"
+            accessibilityRole="button"
+            accessibilityState={{ selected: !selectedCategoryId }}
+            onPress={() => setSelectedCategoryId(null)}
+            style={({ pressed }) => [
+              styles.categoryChip,
+              !selectedCategoryId && styles.categoryChipActive,
+              pressed && styles.pressed,
+            ]}
+          >
             <Text
               style={[
                 styles.categoryChipText,
                 !selectedCategoryId && styles.categoryChipTextActive,
-              ]}>
+              ]}
+            >
               All
             </Text>
           </Pressable>
@@ -224,11 +414,23 @@ export default function RestaurantDetailScreen() {
             const active = selectedCategoryId === category.id;
             return (
               <Pressable
+                accessibilityLabel={`${category.name} menu items`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
                 key={category.id}
-                style={[styles.categoryChip, active && styles.categoryChipActive]}
-                onPress={() => setSelectedCategoryId(category.id)}>
+                onPress={() => setSelectedCategoryId(category.id)}
+                style={({ pressed }) => [
+                  styles.categoryChip,
+                  active && styles.categoryChipActive,
+                  pressed && styles.pressed,
+                ]}
+              >
                 <Text
-                  style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>
+                  style={[
+                    styles.categoryChipText,
+                    active && styles.categoryChipTextActive,
+                  ]}
+                >
                   {category.name}
                 </Text>
               </Pressable>
@@ -236,78 +438,136 @@ export default function RestaurantDetailScreen() {
           })}
         </ScrollView>
 
-        <Text style={styles.menuHeading}>Menu</Text>
-
-        {groupedSections.length === 0 ? (
-          <View style={styles.emptyMenu}>
-            <Text style={styles.emptyMenuEmoji}>🍴</Text>
-            <Text style={styles.emptyMenuTitle}>No items available</Text>
-            <Text style={styles.emptyMenuText}>Check back later for this restaurant&apos;s menu</Text>
-          </View>
-        ) : (
-          groupedSections.map((section) => (
-            <View key={section.title} style={styles.section}>
-              {!selectedCategoryId ? (
-                <Text style={styles.sectionTitle}>{section.title}</Text>
-              ) : null}
-              {section.data.map((item) => {
-                const quantity = getItemQuantity(item.id);
-                return (
-                  <View key={item.id} style={styles.menuCard}>
-                    {item.imageUrl ? (
-                      <Image source={{ uri: item.imageUrl }} style={styles.menuImage} />
-                    ) : (
-                      <View style={[styles.menuImage, styles.menuImagePlaceholder]}>
-                        <Text>🍕</Text>
-                      </View>
-                    )}
-                    <View style={styles.menuBody}>
-                      <Text style={styles.menuName}>{item.name}</Text>
-                      {item.description ? (
-                        <Text style={styles.menuDescription} numberOfLines={2}>
-                          {item.description}
-                        </Text>
-                      ) : null}
-                      <Text style={styles.menuPrice}>{formatPrice(item.price)}</Text>
-                    </View>
-
-                    {quantity > 0 ? (
-                      <View style={styles.qtyControls}>
-                        <Pressable
-                          style={styles.qtyButton}
-                          onPress={() => decrementItem(item.id)}>
-                          <Text style={styles.qtyButtonText}>−</Text>
-                        </Pressable>
-                        <Text style={styles.qtyValue}>{quantity}</Text>
-                        <Pressable
-                          style={styles.qtyButton}
-                          onPress={() => incrementItem(item.id)}>
-                          <Text style={styles.qtyButtonText}>+</Text>
-                        </Pressable>
-                      </View>
-                    ) : (
-                      <Pressable
-                        style={styles.addButton}
-                        onPress={() => addToCart(item)}
-                        disabled={!restaurant.isOpen}>
-                        <Text style={styles.addButtonText}>Add</Text>
-                      </Pressable>
-                    )}
-                  </View>
-                );
-              })}
+        <View style={styles.menuContent}>
+          {groupedSections.length === 0 ? (
+            <View style={styles.emptyMenu}>
+              <View style={styles.emptyMenuIcon}>
+                <AppIcon
+                  color={brand.colors.light.primary}
+                  name="menu"
+                  size="lg"
+                />
+              </View>
+              <Text style={styles.emptyMenuTitle}>No items available</Text>
+              <Text style={styles.emptyMenuText}>
+                Check back soon for this restaurant&apos;s menu.
+              </Text>
             </View>
-          ))
-        )}
+          ) : (
+            groupedSections.map((section) => (
+              <View key={section.title} style={styles.section}>
+                {!selectedCategoryId ? (
+                  <Text style={styles.sectionTitle}>{section.title}</Text>
+                ) : null}
+                {section.data.map((item) => {
+                  const quantity = getItemQuantity(item.id);
+                  return (
+                    <View key={item.id} style={styles.menuCard}>
+                      <WasilImage
+                        contentFit="cover"
+                        style={styles.menuImage}
+                        uri={item.imageUrl}
+                      />
+                      <View style={styles.menuBody}>
+                        <Text numberOfLines={1} style={styles.menuName}>
+                          {item.name}
+                        </Text>
+                        {item.description ? (
+                          <Text
+                            numberOfLines={2}
+                            style={styles.menuDescription}
+                          >
+                            {item.description}
+                          </Text>
+                        ) : null}
+                        <Text style={styles.menuPrice}>
+                          {formatPrice(item.price)}
+                        </Text>
+                      </View>
+
+                      {quantity > 0 ? (
+                        <View
+                          accessibilityLabel={`${quantity} ${item.name} in cart`}
+                          style={styles.qtyControls}
+                        >
+                          <Pressable
+                            accessibilityLabel={`Remove one ${item.name}`}
+                            accessibilityRole="button"
+                            hitSlop={4}
+                            onPress={() => decrementItem(item.id)}
+                            style={({ pressed }) => [
+                              styles.qtyButton,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            <AppIcon
+                              color={brand.colors.light.ink}
+                              name="minus"
+                              size="xs"
+                            />
+                          </Pressable>
+                          <Text style={styles.qtyValue}>{quantity}</Text>
+                          <Pressable
+                            accessibilityLabel={`Add one ${item.name}`}
+                            accessibilityRole="button"
+                            hitSlop={4}
+                            onPress={() => incrementItem(item.id)}
+                            style={({ pressed }) => [
+                              styles.qtyButton,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            <AppIcon
+                              color={brand.colors.light.ink}
+                              name="plus"
+                              size="xs"
+                            />
+                          </Pressable>
+                        </View>
+                      ) : (
+                        <Pressable
+                          accessibilityLabel={`Add ${item.name} to cart`}
+                          accessibilityRole="button"
+                          disabled={!restaurant.isOpen}
+                          onPress={() => addToCart(item)}
+                          style={({ pressed }) => [
+                            styles.addButton,
+                            !restaurant.isOpen && styles.addButtonDisabled,
+                            pressed && restaurant.isOpen && styles.pressed,
+                          ]}
+                        >
+                          <AppIcon color="#FFFFFF" name="plus" size="xs" />
+                          <Text style={styles.addButtonText}>Add</Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            ))
+          )}
+        </View>
       </ScrollView>
 
       {cartCount > 0 ? (
-        <Pressable style={styles.cartBar} onPress={goToCart}>
+        <Pressable
+          accessibilityLabel={`View cart, ${cartCount} items, ${formatPrice(cartTotal)}`}
+          accessibilityRole="button"
+          onPress={() => router.push("/(customer)/cart")}
+          style={({ pressed }) => [
+            styles.cartBar,
+            pressed && styles.cartBarPressed,
+          ]}
+        >
           <View style={styles.cartBadge}>
             <Text style={styles.cartBadgeText}>{cartCount}</Text>
           </View>
-          <Text style={styles.cartBarText}>View cart</Text>
+          <View style={styles.cartCopy}>
+            <Text style={styles.cartBarText}>View cart</Text>
+            <Text style={styles.cartBarHint}>Ready when you are</Text>
+          </View>
           <Text style={styles.cartBarPrice}>{formatPrice(cartTotal)}</Text>
+          <AppIcon color="#FFFFFF" name="navigation" size="sm" />
         </Pressable>
       ) : null}
     </View>
@@ -315,347 +575,429 @@ export default function RestaurantDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F8F8',
-  },
-  scrollContent: {
-    paddingBottom: 24,
-  },
-  scrollContentWithBar: {
-    paddingBottom: 100,
-  },
+  container: { backgroundColor: brand.colors.light.canvas, flex: 1 },
+  scrollContent: { paddingBottom: 32 },
+  scrollContentWithBar: { paddingBottom: 124 },
   centered: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.canvas,
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff',
-    padding: 24,
+    justifyContent: "center",
+    padding: 28,
+  },
+  loadingIcon: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: 36,
+    height: 80,
+    justifyContent: "center",
+    marginBottom: 16,
+    width: 80,
+  },
+  loadingText: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 14,
+    fontWeight: "700",
+    marginTop: 12,
   },
   notFoundTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111',
-    marginBottom: 16,
+    color: brand.colors.light.ink,
+    fontSize: 22,
+    fontWeight: "900",
+    marginBottom: 8,
+  },
+  notFoundText: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 24,
+    textAlign: "center",
   },
   primaryButton: {
-    backgroundColor: '#FF6B35',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 10,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.ink,
+    borderRadius: brand.radius.medium,
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 18,
   },
-  primaryButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 16,
-  },
+  primaryButtonText: { color: "#FFFFFF", fontSize: 15, fontWeight: "900" },
   heroWrap: {
-    position: 'relative',
-    height: 220,
+    backgroundColor: brand.colors.light.surfaceMuted,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    height: 252,
+    overflow: "hidden",
   },
-  heroImage: {
-    width: '100%',
-    height: '100%',
-  },
-  heroPlaceholder: {
-    backgroundColor: '#F0F0F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroPlaceholderText: {
-    fontSize: 48,
-  },
-  heroOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.15)',
+  heroImage: { height: "100%", width: "100%" },
+  heroActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    left: 16,
+    position: "absolute",
+    right: 16,
+    top: 14,
   },
   backButton: {
-    position: 'absolute',
-    top: 48,
-    left: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.94)",
+    borderColor: "rgba(37,25,42,0.08)",
+    borderRadius: 22,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+    ...brand.shadow,
   },
-  backButtonText: {
-    fontSize: 20,
-    color: '#111',
-    fontWeight: '700',
+  ratingPill: {
+    alignItems: "center",
+    backgroundColor: "rgba(37,25,42,0.9)",
+    borderRadius: brand.radius.pill,
+    flexDirection: "row",
+    gap: 5,
+    minHeight: 36,
+    paddingHorizontal: 11,
   },
+  ratingText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" },
   infoCard: {
-    backgroundColor: '#fff',
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: 26,
+    borderWidth: 1,
     marginHorizontal: 16,
-    marginTop: -24,
-    borderRadius: 16,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
-    marginBottom: 16,
+    marginTop: -26,
+    padding: 18,
+    ...brand.shadow,
   },
   titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 4,
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 12,
+    justifyContent: "space-between",
   },
+  titleBlock: { flex: 1 },
   title: {
-    flex: 1,
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#111',
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statusOpen: {
-    backgroundColor: '#DCFCE7',
-  },
-  statusClosed: {
-    backgroundColor: '#FEE2E2',
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  statusTextOpen: {
-    color: '#16A34A',
-  },
-  statusTextClosed: {
-    color: '#DC2626',
+    color: brand.colors.light.ink,
+    fontSize: 25,
+    fontWeight: "900",
+    letterSpacing: -0.6,
+    marginBottom: 3,
   },
   cuisine: {
-    fontSize: 14,
-    color: '#FF6B35',
-    fontWeight: '600',
-    marginBottom: 6,
+    color: brand.colors.light.primaryText,
+    fontSize: 13,
+    fontWeight: "900",
   },
+  statusBadge: {
+    alignItems: "center",
+    borderRadius: brand.radius.pill,
+    flexDirection: "row",
+    gap: 6,
+    minHeight: 30,
+    paddingHorizontal: 10,
+  },
+  statusOpen: { backgroundColor: "#E4F6F0" },
+  statusClosed: { backgroundColor: "#FDECEE" },
+  statusDot: { borderRadius: 4, height: 7, width: 7 },
+  statusDotOpen: { backgroundColor: brand.colors.light.mint },
+  statusDotClosed: { backgroundColor: brand.colors.light.danger },
+  statusText: { fontSize: 12, fontWeight: "900" },
+  statusTextOpen: { color: brand.colors.light.mint },
+  statusTextClosed: { color: brand.colors.light.danger },
   description: {
+    color: brand.colors.light.inkMuted,
     fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-    marginBottom: 8,
+    lineHeight: 21,
+    marginTop: 12,
+  },
+  metaGrid: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.canvas,
+    borderRadius: brand.radius.medium,
+    flexDirection: "row",
+    marginTop: 16,
+    minHeight: 64,
+    paddingHorizontal: 12,
+  },
+  metaItem: { alignItems: "center", flex: 1, flexDirection: "row", gap: 8 },
+  metaDivider: {
+    backgroundColor: brand.colors.light.border,
+    height: 32,
+    width: 1,
+  },
+  metaLabel: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  metaValue: {
+    color: brand.colors.light.ink,
+    fontSize: 13,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+  addressRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 14,
   },
   address: {
-    fontSize: 13,
-    color: '#777',
-    marginBottom: 10,
+    color: brand.colors.light.inkMuted,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "700",
   },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
-  metaText: {
-    fontSize: 13,
-    color: '#444',
-    fontWeight: '600',
-  },
-  dot: {
-    marginHorizontal: 6,
-    color: '#CCC',
-  },
-  categoryRow: {
-    paddingHorizontal: 16,
-    gap: 8,
-    paddingBottom: 8,
-  },
-  categoryChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#fff',
+  reviewsCard: {
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.large,
     borderWidth: 1,
-    borderColor: '#E8E8E8',
+    marginHorizontal: 16,
+    marginTop: 18,
+    padding: 16,
+    gap: 12,
   },
-  categoryChipActive: {
-    backgroundColor: '#FF6B35',
-    borderColor: '#FF6B35',
+  reviewsHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
   },
-  categoryChipText: {
+  reviewsTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  reviewItem: {
+    borderTopColor: brand.colors.light.border,
+    borderTopWidth: 1,
+    gap: 4,
+    paddingTop: 10,
+  },
+  reviewTop: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  reviewName: {
+    color: brand.colors.light.ink,
     fontSize: 13,
-    fontWeight: '600',
-    color: '#444',
+    fontWeight: "800",
   },
-  categoryChipTextActive: {
-    color: '#fff',
+  reviewRating: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 4,
+  },
+  reviewRatings: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+  },
+  reviewRatingText: {
+    color: brand.colors.light.ink,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  reviewComment: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  menuHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 13,
+    marginTop: 28,
+    paddingHorizontal: 16,
+  },
+  menuEyebrow: {
+    color: brand.colors.light.primaryText,
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.15,
+    marginBottom: 4,
   },
   menuHeading: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111',
-    paddingHorizontal: 16,
-    marginBottom: 12,
-    marginTop: 8,
+    color: brand.colors.light.ink,
+    fontSize: 21,
+    fontWeight: "900",
+    letterSpacing: -0.4,
   },
-  section: {
-    paddingHorizontal: 16,
-    marginBottom: 8,
+  menuCountPill: {
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: brand.radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
+  menuCount: {
+    color: brand.colors.light.primaryText,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  categoryRow: { gap: 8, paddingHorizontal: 16, paddingRight: 28 },
+  categoryChip: {
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.pill,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 38,
+    paddingHorizontal: 14,
+  },
+  categoryChipActive: {
+    backgroundColor: brand.colors.light.ink,
+    borderColor: brand.colors.light.ink,
+  },
+  categoryChipText: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  categoryChipTextActive: { color: "#FFFFFF" },
+  menuContent: { paddingHorizontal: 16, paddingTop: 20 },
+  section: { marginBottom: 8 },
   sectionTitle: {
+    color: brand.colors.light.ink,
     fontSize: 16,
-    fontWeight: '700',
-    color: '#333',
+    fontWeight: "900",
     marginBottom: 10,
-    marginTop: 4,
   },
   menuCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 12,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.large,
+    borderWidth: 1,
+    flexDirection: "row",
     gap: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    marginBottom: 12,
+    minHeight: 104,
+    padding: 10,
+    ...brand.shadow,
   },
-  menuImage: {
-    width: 72,
-    height: 72,
-    borderRadius: 10,
-    backgroundColor: '#F3F3F3',
-  },
-  menuImagePlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  menuBody: {
-    flex: 1,
-  },
+  menuImage: { borderRadius: 16, height: 82, width: 82 },
+  menuBody: { alignSelf: "stretch", flex: 1, justifyContent: "center" },
   menuName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111',
+    color: brand.colors.light.ink,
+    fontSize: 15,
+    fontWeight: "900",
     marginBottom: 4,
   },
   menuDescription: {
+    color: brand.colors.light.inkMuted,
     fontSize: 12,
-    color: '#777',
-    marginBottom: 6,
     lineHeight: 16,
+    marginBottom: 6,
   },
   menuPrice: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#FF6B35',
+    color: brand.colors.light.primaryText,
+    fontSize: 14,
+    fontWeight: "900",
   },
   addButton: {
-    backgroundColor: '#FF6B35',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.ink,
+    borderRadius: 14,
+    flexDirection: "row",
+    gap: 3,
+    justifyContent: "center",
+    minHeight: 38,
+    paddingHorizontal: 10,
   },
-  addButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
+  addButtonDisabled: { backgroundColor: brand.colors.light.border },
+  addButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
   qtyControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#FFF4EF',
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: 14,
+    flexDirection: "row",
+    minHeight: 38,
+    paddingHorizontal: 3,
   },
   qtyButton: {
+    alignItems: "center",
+    height: 32,
+    justifyContent: "center",
     width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#FF6B35',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  qtyButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-    lineHeight: 20,
   },
   qtyValue: {
-    minWidth: 18,
-    textAlign: 'center',
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#111',
+    color: brand.colors.light.ink,
+    fontSize: 13,
+    fontWeight: "900",
+    minWidth: 16,
+    textAlign: "center",
   },
   emptyMenu: {
-    alignItems: 'center',
-    paddingVertical: 48,
-    paddingHorizontal: 24,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.large,
+    borderStyle: "dashed",
+    borderWidth: 1,
+    padding: 28,
   },
-  emptyMenuEmoji: {
-    fontSize: 40,
-    marginBottom: 12,
+  emptyMenuIcon: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: 24,
+    height: 56,
+    justifyContent: "center",
+    marginBottom: 10,
+    width: 56,
   },
   emptyMenuTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111',
-    marginBottom: 6,
+    color: brand.colors.light.ink,
+    fontSize: 17,
+    fontWeight: "900",
+    marginBottom: 5,
   },
   emptyMenuText: {
-    fontSize: 14,
-    color: '#888',
-    textAlign: 'center',
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
   },
   cartBar: {
-    position: 'absolute',
+    alignItems: "center",
+    backgroundColor: brand.colors.light.ink,
+    borderRadius: 22,
+    bottom: 12,
+    flexDirection: "row",
+    gap: 10,
     left: 16,
+    minHeight: 66,
+    paddingHorizontal: 13,
+    position: "absolute",
     right: 16,
-    bottom: 24,
-    backgroundColor: '#FF6B35',
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    ...brand.shadow,
   },
+  cartBarPressed: { opacity: 0.9, transform: [{ scale: 0.99 }] },
   cartBadge: {
-    backgroundColor: '#fff',
-    minWidth: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.accent,
+    borderRadius: 16,
+    height: 32,
+    justifyContent: "center",
+    width: 32,
   },
   cartBadgeText: {
-    color: '#FF6B35',
-    fontWeight: '800',
+    color: brand.colors.light.ink,
     fontSize: 13,
+    fontWeight: "900",
   },
-  cartBarText: {
-    flex: 1,
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
+  cartCopy: { flex: 1 },
+  cartBarText: { color: "#FFFFFF", fontSize: 15, fontWeight: "900" },
+  cartBarHint: {
+    color: "rgba(255,255,255,0.68)",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 2,
   },
-  cartBarPrice: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '800',
-  },
+  cartBarPrice: { color: "#FFFFFF", fontSize: 15, fontWeight: "900" },
+  pressed: { opacity: 0.76, transform: [{ scale: 0.97 }] },
 });

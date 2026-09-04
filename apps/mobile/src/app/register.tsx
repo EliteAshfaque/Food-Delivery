@@ -12,6 +12,8 @@ import { useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import { router } from "expo-router";
 import { UserRole } from "@food-delivery/types";
+import { brand } from "@/constants/brand";
+import { WasilLogo } from "@/components/wasil-brand";
 
 const ROLES = [
   { label: "Customer", value: UserRole.CUSTOMER },
@@ -35,7 +37,7 @@ const RegisterScreen = () => {
     setLoading(true);
     try {
       await register({ firstName, lastName, email, password, role });
-    //   router.push("/dashboard");
+      //   router.push("/dashboard");
     } catch (error) {
       Alert.alert("Error while Registering the User");
     } finally {
@@ -46,7 +48,8 @@ const RegisterScreen = () => {
   return (
     <ScrollView contentContainerStyle={styles.scrollContainer}>
       <View style={styles.container}>
-        <Text style={styles.title}>Create Account!</Text>
+        <WasilLogo showTagline size={44} style={styles.logo} />
+        <Text style={styles.title}>Create your account</Text>
 
         <TextInput
           style={styles.input}
@@ -76,7 +79,7 @@ const RegisterScreen = () => {
         <TextInput
           style={styles.input}
           placeholder="Password"
-          value={password}  // Fixed: was email
+          value={password} // Fixed: was email
           onChangeText={setPassword}
           secureTextEntry
         />
@@ -89,14 +92,14 @@ const RegisterScreen = () => {
               key={r.value}
               style={[
                 styles.roleButton,
-                role === r.value && styles.roleButtonActive,  // Fixed: was rPressed
+                role === r.value && styles.roleButtonActive, // Fixed: was rPressed
               ]}
               onPress={() => setRole(r.value)}
             >
               <Text
                 style={[
                   styles.roleText,
-                  role === r.value && styles.roleTextActive,  // Fixed: was rLabel
+                  role === r.value && styles.roleTextActive, // Fixed: was rLabel
                 ]}
               >
                 {r.label}
@@ -107,17 +110,19 @@ const RegisterScreen = () => {
 
         <Pressable
           style={[styles.button, isLoading && styles.buttonDisabled]}
-          onPress={handleRegister}  // Fixed: was incorrect syntax
+          onPress={handleRegister} // Fixed: was incorrect syntax
           disabled={isLoading}
         >
-          {isLoading ? (  // Fixed: conditional rendering
+          {isLoading ? ( // Fixed: conditional rendering
             <ActivityIndicator color="#ffffff" />
           ) : (
             <Text style={styles.buttonText}>Register</Text>
           )}
         </Pressable>
 
-        <Pressable onPress={() => router.back()}>  {/* Fixed: was incorrect syntax */}
+        <Pressable onPress={() => router.back()}>
+          {" "}
+          {/* Fixed: was incorrect syntax */}
           <Text style={styles.link}>Already have an account? Login</Text>
         </Pressable>
       </View>
@@ -130,79 +135,82 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   container: {
-    flex: 1,  // Fixed: was flexRow
-    justifyContent: 'center',
+    flex: 1, // Fixed: was flexRow
+    justifyContent: "center",
     padding: 24,
-    backgroundColor: '#fff',
+    backgroundColor: brand.colors.light.canvas,
+  },
+  logo: {
+    marginBottom: 32,
   },
   title: {
     fontSize: 28,
-    fontWeight: '700',
+    fontWeight: "900",
     marginBottom: 32,
-    textAlign: 'center',
+    color: brand.colors.light.ink,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
     padding: 14,
     marginBottom: 16,
     fontSize: 16,
-    backgroundColor: '#fafafa',
+    backgroundColor: brand.colors.light.surface,
   },
   label: {
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: "500",
     marginBottom: 12,
-    color: '#333',
+    color: brand.colors.light.ink,
   },
   roleContainer: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 8,
     marginBottom: 24,
   },
   roleButton: {
     flex: 1,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: brand.radius.medium,
     borderWidth: 1,
-    borderColor: '#ddd',
-    alignItems: 'center',
-    backgroundColor: '#fff',
+    borderColor: brand.colors.light.border,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
   },
   roleButtonActive: {
-    backgroundColor: '#FF6B35',
-    borderColor: '#FF6B35',
+    backgroundColor: brand.colors.light.primary,
+    borderColor: brand.colors.light.primary,
   },
   roleText: {
     fontSize: 13,
-    color: '#666',
+    color: "#666",
   },
   roleTextActive: {
-    color: '#fff',
-    fontWeight: '600',
+    color: "#fff",
+    fontWeight: "600",
   },
   button: {
-    backgroundColor: '#FF6B35',
-    borderRadius: 8,
+    backgroundColor: brand.colors.light.primary,
+    borderRadius: brand.radius.medium,
     padding: 16,
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: 16,
   },
   buttonDisabled: {
-    backgroundColor: '#FFB088',
+    backgroundColor: "#FFB088",
     opacity: 0.7,
   },
   buttonText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   link: {
-    textAlign: 'center',
-    color: '#FF6B35',
+    textAlign: "center",
+    color: brand.colors.light.primary,
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: "500",
   },
 });
 

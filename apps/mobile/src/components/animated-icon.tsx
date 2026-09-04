@@ -1,148 +1,156 @@
-import { Image } from 'expo-image';
-import * as SplashScreen from 'expo-splash-screen';
-import { useState } from 'react';
-import { Dimensions, StyleSheet, View } from 'react-native';
-import Animated, { Easing, Keyframe } from 'react-native-reanimated';
-import { scheduleOnRN } from 'react-native-worklets';
+import * as SplashScreen from "expo-splash-screen";
+import { useEffect, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 
-const INITIAL_SCALE_FACTOR = Dimensions.get('screen').height / 90;
-const DURATION = 600;
+import { brand } from "@/constants/brand";
+import { useAuth } from "@/context/auth-context";
+import { WasilMark } from "./wasil-brand";
 
+// Expo recommends preventing the native splash from hiding at module scope.
+void SplashScreen.preventAutoHideAsync();
+SplashScreen.setOptions({ duration: 420, fade: true });
+
+/**
+ * Carries the native Wasil splash into the app while the auth session restores.
+ * Keeping the dark-plum background consistent avoids a visible launch flash.
+ */
 export function AnimatedSplashOverlay() {
-  const [animate, setAnimate] = useState(false);
+  const { isLoading } = useAuth();
   const [visible, setVisible] = useState(true);
+  const reduceMotion = useReducedMotion();
+  const logoScale = useSharedValue(reduceMotion ? 1 : 0.82);
+  const wordmarkOpacity = useSharedValue(reduceMotion ? 1 : 0);
+  const overlayOpacity = useSharedValue(1);
+
+  useEffect(() => {
+    if (reduceMotion) {
+      logoScale.value = 1;
+      wordmarkOpacity.value = 1;
+      return;
+    }
+
+    logoScale.value = withSpring(1, { damping: 13, stiffness: 170 });
+    wordmarkOpacity.value = withDelay(150, withTiming(1, { duration: 340 }));
+  }, [logoScale, reduceMotion, wordmarkOpacity]);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    const beginExit = setTimeout(
+      () => {
+        void SplashScreen.hideAsync();
+        overlayOpacity.value = reduceMotion
+          ? 0
+          : withTiming(0, {
+              duration: 360,
+              easing: Easing.out(Easing.cubic),
+            });
+      },
+      reduceMotion ? 0 : 620,
+    );
+    const finishExit = setTimeout(
+      () => setVisible(false),
+      reduceMotion ? 0 : 1040,
+    );
+
+    return () => {
+      clearTimeout(beginExit);
+      clearTimeout(finishExit);
+    };
+  }, [isLoading, overlayOpacity, reduceMotion]);
+
+  const logoStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: logoScale.value }],
+  }));
+  const wordmarkStyle = useAnimatedStyle(() => ({
+    opacity: wordmarkOpacity.value,
+  }));
+  const overlayStyle = useAnimatedStyle(() => ({
+    opacity: overlayOpacity.value,
+  }));
 
   if (!visible) return null;
 
-  const splashKeyframe = new Keyframe({
-    0: {
-      transform: [{ scale: 1 }],
-      opacity: 1,
-    },
-    20: {
-      opacity: 1,
-    },
-    70: {
-      opacity: 0,
-      easing: Easing.elastic(0.7),
-    },
-    100: {
-      opacity: 0,
-      transform: [{ scale: 1 }],
-      easing: Easing.elastic(0.7),
-    },
-  });
-
-  const image = <Image style={styles.image} source={require('@/assets/images/expo-logo.png')} />;
-
-  return animate ? (
+  return (
     <Animated.View
-      entering={splashKeyframe.duration(DURATION).withCallback((finished) => {
-        'worklet';
-        if (finished) {
-          scheduleOnRN(setVisible, false);
-        }
-      })}
-      style={styles.splashOverlay}>
-      {image}
+      accessibilityLabel="Loading Wasil"
+      accessibilityRole="progressbar"
+      accessibilityState={{ busy: true }}
+      accessibilityViewIsModal
+      pointerEvents="auto"
+      style={[styles.overlay, overlayStyle]}
+    >
+      <Animated.View style={logoStyle}>
+        <WasilMark size={104} inverted />
+      </Animated.View>
+      <Animated.View style={wordmarkStyle}>
+        <Text style={styles.wordmark}>wasil</Text>
+        <Text style={styles.tagline}>YOUR CITY, DELIVERED.</Text>
+      </Animated.View>
     </Animated.View>
-  ) : (
-    <View
-      onLayout={() => {
-        SplashScreen.hideAsync().finally(() => {
-          setAnimate(true);
-        });
-      }}
-      style={styles.splashOverlay}>
-      {image}
-    </View>
   );
 }
 
-const keyframe = new Keyframe({
-  0: {
-    transform: [{ scale: INITIAL_SCALE_FACTOR }],
-  },
-  100: {
-    transform: [{ scale: 1 }],
-    easing: Easing.elastic(0.7),
-  },
-});
-
-const logoKeyframe = new Keyframe({
-  0: {
-    transform: [{ scale: 1.3 }],
-    opacity: 0,
-  },
-  40: {
-    transform: [{ scale: 1.3 }],
-    opacity: 0,
-    easing: Easing.elastic(0.7),
-  },
-  100: {
-    opacity: 1,
-    transform: [{ scale: 1 }],
-    easing: Easing.elastic(0.7),
-  },
-});
-
-const glowKeyframe = new Keyframe({
-  0: {
-    transform: [{ rotateZ: '0deg' }],
-  },
-  100: {
-    transform: [{ rotateZ: '7200deg' }],
-  },
-});
-
+/** A reusable compact identity lockup for empty, loading, and health states. */
 export function AnimatedIcon() {
+  const reduceMotion = useReducedMotion();
+  const scale = useSharedValue(reduceMotion ? 1 : 0.88);
+  const style = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  useEffect(() => {
+    scale.value = reduceMotion
+      ? 1
+      : withSpring(1, { damping: 11, stiffness: 165 });
+  }, [reduceMotion, scale]);
+
   return (
     <View style={styles.iconContainer}>
-      <Animated.View entering={glowKeyframe.duration(60 * 1000 * 4)} style={styles.glow}>
-        <Image style={styles.glow} source={require('@/assets/images/logo-glow.png')} />
-      </Animated.View>
-
-      <Animated.View entering={keyframe.duration(DURATION)} style={styles.background} />
-      <Animated.View style={styles.imageContainer} entering={logoKeyframe.duration(DURATION)}>
-        <Image style={styles.image} source={require('@/assets/images/expo-logo.png')} />
+      <Animated.View style={style}>
+        <WasilMark size={86} />
       </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  imageContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
+  overlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.ink,
+    justifyContent: "center",
+    zIndex: 1000,
   },
-  glow: {
-    width: 201,
-    height: 201,
-    position: 'absolute',
+  wordmark: {
+    color: "#FFFFFF",
+    fontSize: 42,
+    fontWeight: "900",
+    letterSpacing: -2.2,
+    marginTop: 18,
+    textAlign: "center",
+  },
+  tagline: {
+    color: "rgba(255,255,255,0.76)",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.6,
+    marginTop: 2,
+    textAlign: "center",
   },
   iconContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: 128,
-    height: 128,
-    zIndex: 100,
-  },
-  image: {
-    width: 76,
-    height: 71,
-  },
-  background: {
-    borderRadius: 40,
-    experimental_backgroundImage: `linear-gradient(180deg, #3C9FFE, #0274DF)`,
-    width: 128,
-    height: 128,
-    position: 'absolute',
-  },
-  splashOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: '#208AEF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
+    alignItems: "center",
+    height: 96,
+    justifyContent: "center",
+    width: 96,
   },
 });

@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Request,
   UseGuards,
@@ -10,6 +11,7 @@ import {
 import type { Request as ExpressRequest } from 'express';
 import { OrdersService } from './oder.service';
 import { CreateOrderDto } from './dto/create-oder.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/role.decorator';
@@ -31,9 +33,37 @@ export class OrdersController {
 
   @Get('mine')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.CUSTOMER)
+  @Roles(UserRole.CUSTOMER, UserRole.DRIVER)
   findMine(@Request() req: AuthRequest) {
-    return this.ordersService.findByCustomer(req.user.sub);
+    return this.ordersService.findMyOrders(req.user.sub, req.user.role);
+  }
+
+  @Get('restaurant')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RESTAURANT_OWNER)
+  findByOwner(@Request() req: AuthRequest) {
+    return this.ordersService.findByOwner(req.user.sub);
+  }
+
+  @Get('restaurant/:restaurantId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RESTAURANT_OWNER)
+  findByRestaurant(
+    @Param('restaurantId') restaurantId: string,
+    @Request() req: AuthRequest,
+  ) {
+    return this.ordersService.findByRestaurant(restaurantId, req.user.sub);
+  }
+
+  @Patch(':id/status')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RESTAURANT_OWNER, UserRole.DRIVER)
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderStatusDto,
+    @Request() req: AuthRequest,
+  ) {
+    return this.ordersService.updateStatus(id, dto.status, req.user);
   }
 
   @Get(':id')

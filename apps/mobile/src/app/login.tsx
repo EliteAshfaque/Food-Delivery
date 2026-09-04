@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -10,29 +10,31 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { router } from 'expo-router';
+} from "react-native";
+import { router } from "expo-router";
 
-import { useAuth } from '@/context/auth-context';
+import { useAuth } from "@/context/auth-context";
+import { brand } from "@/constants/brand";
+import { WasilLogo } from "@/components/wasil-brand";
 
 export default function LoginScreen() {
   const { login } = useAuth();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [isLoading, setLoading] = useState(false);
 
   async function handleLogin() {
     if (!email || !password) {
-      Alert.alert('Missing details', 'Please fill in all required fields.');
+      Alert.alert("Missing details", "Please fill in all required fields.");
       return;
     }
 
     setLoading(true);
     try {
       await login(email, password);
-      router.replace('/');
+      router.replace("/");
     } catch {
-      Alert.alert('Login failed', 'Please check your email and password.');
+      Alert.alert("Login failed", "Please check your email and password.");
     } finally {
       setLoading(false);
     }
@@ -41,18 +43,23 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
       <ScrollView
         contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled">
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.form}>
+          <WasilLogo showTagline size={46} style={styles.logo} />
           <Text style={styles.title}>Welcome back!</Text>
-          <Text style={styles.subtitle}>Sign in to continue ordering</Text>
+          <Text style={styles.subtitle}>
+            Sign in and let Wasil bring the city to you.
+          </Text>
 
           <TextInput
             style={styles.input}
             placeholder="Email"
-            placeholderTextColor="#999"
+            placeholderTextColor={brand.colors.light.inkMuted}
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -62,7 +69,7 @@ export default function LoginScreen() {
           <TextInput
             style={styles.input}
             placeholder="Password"
-            placeholderTextColor="#999"
+            placeholderTextColor={brand.colors.light.inkMuted}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
@@ -71,7 +78,8 @@ export default function LoginScreen() {
           <Pressable
             style={[styles.button, isLoading && styles.buttonDisabled]}
             onPress={() => void handleLogin()}
-            disabled={isLoading}>
+            disabled={isLoading}
+          >
             {isLoading ? (
               <ActivityIndicator color="#fff" />
             ) : (
@@ -79,8 +87,13 @@ export default function LoginScreen() {
             )}
           </Pressable>
 
-          <Pressable onPress={() => router.push('/register')} disabled={isLoading}>
-            <Text style={styles.link}>Don&apos;t have an account? Register</Text>
+          <Pressable
+            onPress={() => router.push("/register")}
+            disabled={isLoading}
+          >
+            <Text style={styles.link}>
+              Don&apos;t have an account? Register
+            </Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -91,57 +104,60 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: brand.colors.light.canvas,
   },
   container: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     padding: 24,
   },
   form: {
-    width: '100%',
+    width: "100%",
     maxWidth: 480,
-    alignSelf: 'center',
+    alignSelf: "center",
+  },
+  logo: {
+    marginBottom: 36,
   },
   title: {
     fontSize: 28,
-    fontWeight: '700',
+    fontWeight: "900",
     marginBottom: 8,
-    color: '#111',
+    color: brand.colors.light.ink,
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
+    color: brand.colors.light.inkMuted,
     marginBottom: 32,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
     padding: 14,
     marginBottom: 16,
     fontSize: 16,
-    backgroundColor: '#fafafa',
-    color: '#111',
+    backgroundColor: brand.colors.light.surface,
+    color: brand.colors.light.ink,
   },
   button: {
-    backgroundColor: '#FF6B35',
-    borderRadius: 8,
+    backgroundColor: brand.colors.light.primary,
+    borderRadius: brand.radius.medium,
     padding: 16,
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: 16,
   },
   buttonDisabled: {
     opacity: 0.7,
   },
   buttonText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   link: {
-    textAlign: 'center',
-    color: '#FF6B35',
+    textAlign: "center",
+    color: brand.colors.light.primary,
     fontSize: 15,
   },
 });
