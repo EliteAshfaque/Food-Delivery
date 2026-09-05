@@ -19,7 +19,9 @@ import { BottomTabInset } from '@/constants/theme';
 import { api } from '@/lib/axios';
 import { WasilLogo } from '@/components/wasil-brand';
 import { AppIcon } from '@/components/wasil-icon-system';
+import { RequestErrorState } from '@/components/request-error-state';
 import { OrderStatusChip } from '@/components/wasil-ui-components';
+import { formatCurrency } from '@/lib/format';
 
 type OrderItem = {
   id: string;
@@ -54,11 +56,6 @@ const terminalStatuses: readonly OrderStatusType[] = [
   OrderStatus.DELIVERED,
   OrderStatus.CANCELLED,
 ];
-
-function formatPrice(price: string) {
-  const value = Number.parseFloat(price);
-  return Number.isNaN(value) ? price : `$${value.toFixed(2)}`;
-}
 
 function formatOrderDate(value: string) {
   const date = new Date(value);
@@ -97,6 +94,8 @@ function sortOrders(orders: CustomerOrder[]) {
 export default function CustomerOrdersScreen() {
   const {
     data: orders = [],
+    error,
+    isError,
     isLoading,
     isFetching,
     refetch,
@@ -152,6 +151,12 @@ export default function CustomerOrdersScreen() {
               />
               <Text style={styles.emptyText}>Loading your orders…</Text>
             </View>
+          ) : isError ? (
+            <RequestErrorState
+              error={error}
+              onRetry={() => void refetch()}
+              title="Couldn’t load your orders"
+            />
           ) : (
             <View style={styles.empty}>
               <View style={styles.emptyIcon}>
@@ -228,7 +233,7 @@ export default function CustomerOrdersScreen() {
                     ? 'Tap to rate your order'
                     : itemsLabel ?? 'View details'}
                 </Text>
-                <Text style={styles.total}>{formatPrice(item.totalAmount)}</Text>
+                <Text style={styles.total}>{formatCurrency(item.totalAmount)}</Text>
                 <AppIcon
                   name="navigation"
                   size="sm"

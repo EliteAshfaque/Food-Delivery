@@ -29,6 +29,10 @@ function RootNavigator() {
         <Stack.Screen name="(driver)" />
       </Stack.Protected>
 
+      <Stack.Protected guard={user?.role === UserRole.ADMIN}>
+        <Stack.Screen name="(admin)" />
+      </Stack.Protected>
+
       <Stack.Screen name="index" />
       <Stack.Screen name="health" />
     </Stack>

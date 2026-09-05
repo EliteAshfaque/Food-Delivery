@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Request,
@@ -49,7 +50,7 @@ export class OrdersController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER)
   findByRestaurant(
-    @Param('restaurantId') restaurantId: string,
+    @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
     @Request() req: AuthRequest,
   ) {
     return this.ordersService.findByRestaurant(restaurantId, req.user.sub);
@@ -66,7 +67,7 @@ export class OrdersController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER, UserRole.DRIVER)
   updateStatus(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateOrderStatusDto,
     @Request() req: AuthRequest,
   ) {
@@ -74,7 +75,7 @@ export class OrdersController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Request() req: AuthRequest) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req: AuthRequest) {
     return this.ordersService.findById(id, req.user);
   }
 }

@@ -1,9 +1,9 @@
-import axios from 'axios';
+import { create } from 'axios';
 
 import { getToken } from '../../lib/auth';
 import { getApiUrl } from './api-config';
 
-export const api = axios.create({
+export const api = create({
   headers: {
     'Content-Type': 'application/json',
   },

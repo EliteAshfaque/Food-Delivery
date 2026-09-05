@@ -9,7 +9,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import * as Location from "expo-location";
 import { api } from "@/lib/axios";
@@ -20,14 +20,29 @@ import { WasilMark } from "@/components/wasil-brand";
 import { AppIcon } from "@/components/wasil-icon-system";
 import { WasilImage } from "@/components/wasil-image";
 import { LocationPicker } from "@/components/location-picker";
+import { getApiErrorMessage } from "@/lib/api-error";
+import { formatCurrency } from "@/lib/format";
+import { validateDeliveryDetails } from "@/lib/form-validation";
 import {
   getAddressForCoordinates,
   getCoordinatesForAddress,
 } from "@/lib/location";
 
-function formatPrice(value: number) {
-  return `$${value.toFixed(2)}`;
-}
+type OfferQuote = {
+  offer: {
+    id: string;
+    title: string;
+    code: string | null;
+  };
+  subtotalAmount: string;
+  discountAmount: string;
+  totalAmount: string;
+};
+
+type RestaurantOfferValue = {
+  restaurantId: string | null;
+  value: string;
+};
 
 export default function CustomerCartScreen() {
   const [deliveryAddress, setDeliveryAddress] = useState("");
@@ -37,6 +52,13 @@ export default function CustomerCartScreen() {
   } | null>(null);
   const [locating, setLocating] = useState(false);
   const [isMapPickerVisible, setMapPickerVisible] = useState(false);
+  const [offerInput, setOfferInput] = useState<RestaurantOfferValue>({
+    restaurantId: null,
+    value: "",
+  });
+  const [appliedOffer, setAppliedOffer] = useState<RestaurantOfferValue | null>(
+    null,
+  );
   const {
     items,
     restaurantId,
@@ -48,6 +70,64 @@ export default function CustomerCartScreen() {
     totalItems,
     totalPrice,
   } = useCartStore();
+  const subtotal = totalPrice();
+  // Offers are scoped to the restaurant that was in the cart when they were
+  // entered. Deriving the visible value prevents a code from being carried to
+  // a replacement cart without an effect that resets form state after render.
+  const offerCode =
+    offerInput.restaurantId === restaurantId ? offerInput.value : "";
+  const appliedOfferCode =
+    appliedOffer?.restaurantId === restaurantId ? appliedOffer.value : null;
+
+  function setOfferCode(value: string) {
+    setOfferInput({ restaurantId, value });
+  }
+
+  function setAppliedOfferCode(value: string | null) {
+    setAppliedOffer(value ? { restaurantId, value } : null);
+  }
+
+  const offerQuote = useQuery<OfferQuote | null>({
+    queryKey: ["offer-quote", restaurantId, subtotal, appliedOfferCode],
+    queryFn: () =>
+      api
+        .post<OfferQuote | null>("/offers/validate", {
+          restaurantId,
+          subtotalAmount: subtotal,
+          code: appliedOfferCode ?? undefined,
+        })
+        .then((res) => res.data),
+    enabled: Boolean(restaurantId && subtotal > 0),
+    retry: false,
+    staleTime: 15_000,
+  });
+
+  const { mutate: validateOfferCode, isPending: validatingOffer } = useMutation({
+    mutationFn: (code: string) => {
+      if (!restaurantId) throw new Error("No restaurant selected");
+      return api
+        .post<OfferQuote | null>("/offers/validate", {
+          restaurantId,
+          subtotalAmount: subtotal,
+          code,
+        })
+        .then((res) => res.data);
+    },
+    onSuccess: (quote, code) => {
+      if (!quote) {
+        Alert.alert("No offer available", "That code does not apply to this cart.");
+        return;
+      }
+      setOfferCode(code);
+      setAppliedOfferCode(code);
+    },
+    onError: (error) => {
+      Alert.alert("Could not apply offer", getApiErrorMessage(error));
+    },
+  });
+
+  const quotedTotal = offerQuote.data?.totalAmount ?? subtotal;
+  const quotedDiscount = offerQuote.data?.discountAmount ?? "0";
 
   const { mutate: placeOrder, isPending } = useMutation({
     mutationFn: async (coords: { latitude: number; longitude: number }) => {
@@ -61,6 +141,7 @@ export default function CustomerCartScreen() {
           menuItemId: item.id,
           quantity: String(item.quantity),
         })),
+        offerCode: appliedOfferCode ?? undefined,
       });
       return data;
     },
@@ -71,8 +152,8 @@ export default function CustomerCartScreen() {
         params: { id: order.id },
       });
     },
-    onError: (error: Error) => {
-      Alert.alert("Order failed", error.message);
+    onError: (error) => {
+      Alert.alert("Order failed", getApiErrorMessage(error));
     },
   });
 
@@ -126,27 +207,56 @@ export default function CustomerCartScreen() {
   }
 
   async function handlePlaceOrder() {
-    if (!deliveryAddress.trim()) {
-      Alert.alert(
-        "Delivery address required",
-        "Please enter your delivery address.",
-      );
-      return;
-    }
     if (items.length === 0) {
       Alert.alert("Cart is empty", "Add items from a restaurant menu first.");
       return;
     }
 
-    if (!deliveryCoords) {
+    if (!restaurantId) {
+      Alert.alert("Restaurant unavailable", "Return to the restaurant and add your items again.");
+      return;
+    }
+
+    if (
+      items.some(
+        (item) =>
+          !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 99,
+      )
+    ) {
+      Alert.alert("Update item quantity", "Each item quantity must be between 1 and 99.");
+      return;
+    }
+
+    const deliveryError = validateDeliveryDetails({
+      address: deliveryAddress,
+      coordinates: deliveryCoords,
+    });
+    if (deliveryError) {
+      Alert.alert("Delivery details needed", deliveryError);
+      return;
+    }
+
+    // validateDeliveryDetails has confirmed the pin, and this guard narrows
+    // the value for the request payload as well.
+    if (!deliveryCoords) return;
+    if (appliedOfferCode && offerQuote.isError) {
       Alert.alert(
-        "Delivery pin required",
-        "Use your current location or locate the address you entered so the driver can find you.",
+        "Offer needs attention",
+        "This offer is no longer valid for the current cart. Remove it or apply it again before continuing.",
       );
       return;
     }
 
     placeOrder(deliveryCoords);
+  }
+
+  function applyOffer() {
+    const code = offerCode.trim().toUpperCase();
+    if (!code) {
+      setAppliedOfferCode(null);
+      return;
+    }
+    validateOfferCode(code);
   }
 
   async function locateEnteredAddress() {
@@ -169,6 +279,36 @@ export default function CustomerCartScreen() {
     } finally {
       setLocating(false);
     }
+  }
+
+  function handleAddressChange(value: string) {
+    setDeliveryAddress(value);
+    // A typed address may no longer match the existing pin. Require a fresh
+    // lookup so the driver is never sent to a stale location.
+    if (deliveryCoords) setDeliveryCoords(null);
+  }
+
+  async function handleMapLocationConfirm(coordinates: {
+    latitude: number;
+    longitude: number;
+  }) {
+    setDeliveryCoords(coordinates);
+    setMapPickerVisible(false);
+
+    try {
+      const detectedAddress = await getAddressForCoordinates(coordinates);
+      if (detectedAddress) {
+        setDeliveryAddress(detectedAddress);
+        return;
+      }
+    } catch {
+      // The pin is still valid; ask for a delivery instruction below.
+    }
+
+    Alert.alert(
+      "Pin saved",
+      "Add a building, street, or area so your driver has clear delivery instructions.",
+    );
   }
 
   if (items.length === 0) {
@@ -216,7 +356,7 @@ export default function CustomerCartScreen() {
             <View style={styles.itemBody}>
               <Text style={styles.itemName}>{item.name}</Text>
               <Text style={styles.itemPrice}>
-                {formatPrice(parseFloat(item.price) * item.quantity)}
+                {formatCurrency(parseFloat(item.price) * item.quantity)}
               </Text>
               <View style={styles.qtyRow}>
                 <Pressable
@@ -240,6 +380,44 @@ export default function CustomerCartScreen() {
           </View>
         ))}
 
+        <View style={styles.offerBox}>
+          <View style={styles.labelRow}>
+            <AppIcon name="coupon" size="sm" color={brand.colors.light.primary} />
+            <Text style={styles.label}>Offer code</Text>
+          </View>
+          <View style={styles.offerInputRow}>
+            <TextInput
+              autoCapitalize="characters"
+              autoCorrect={false}
+              editable={!validatingOffer}
+              onChangeText={setOfferCode}
+              placeholder="Enter promo code"
+              placeholderTextColor={brand.colors.light.inkMuted}
+              style={styles.offerInput}
+              value={offerCode}
+            />
+            <Pressable
+              disabled={validatingOffer}
+              onPress={applyOffer}
+              style={[styles.offerApplyButton, validatingOffer && styles.buttonDisabled]}
+            >
+              {validatingOffer ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.offerApplyText}>{appliedOfferCode ? "Update" : "Apply"}</Text>}
+            </Pressable>
+          </View>
+          {offerQuote.isFetching ? <Text style={styles.offerHint}>Checking the latest offer…</Text> : null}
+          {offerQuote.data ? (
+            <View style={styles.appliedOffer}>
+              <View style={styles.appliedOfferCopy}>
+                <Text style={styles.appliedOfferTitle}>{offerQuote.data.offer.title}</Text>
+                <Text style={styles.appliedOfferDetail}>{offerQuote.data.offer.code ? `Code ${offerQuote.data.offer.code}` : "Automatically applied"}</Text>
+              </View>
+              <View style={styles.offerSaving}><Text style={styles.offerSavingLabel}>SAVING</Text><Text style={styles.offerSavingValue}>−{formatCurrency(offerQuote.data.discountAmount)}</Text></View>
+              {appliedOfferCode ? <Pressable accessibilityRole="button" onPress={() => { setOfferCode(""); setAppliedOfferCode(null); }}><Text style={styles.removeOfferText}>Remove</Text></Pressable> : null}
+            </View>
+          ) : null}
+          {offerQuote.isError && appliedOfferCode ? <Text style={styles.offerError}>{getApiErrorMessage(offerQuote.error)}</Text> : null}
+        </View>
+
         <View style={styles.field}>
           <View style={styles.labelRow}>
             <AppIcon
@@ -254,7 +432,7 @@ export default function CustomerCartScreen() {
             placeholder="Street, building, apartment..."
             placeholderTextColor={brand.colors.light.inkMuted}
             value={deliveryAddress}
-            onChangeText={setDeliveryAddress}
+            onChangeText={handleAddressChange}
             multiline
             textAlignVertical="top"
           />
@@ -308,18 +486,25 @@ export default function CustomerCartScreen() {
           <View>
             <Text style={styles.summaryLabel}>{totalItems()} items</Text>
             <Text style={styles.summaryNote}>
-              Final payment is confirmed securely.
+              Payment is confirmed securely in the next step.
             </Text>
+            {Number(quotedDiscount) > 0 ? <Text style={styles.summarySaving}>You save {formatCurrency(quotedDiscount)}</Text> : null}
           </View>
-          <Text style={styles.summaryTotal}>{formatPrice(totalPrice())}</Text>
+          <View style={styles.totalCopy}>
+            {Number(quotedDiscount) > 0 ? <Text style={styles.summarySubtotal}>{formatCurrency(subtotal)}</Text> : null}
+            <Text style={styles.summaryTotal}>{formatCurrency(quotedTotal)}</Text>
+          </View>
         </View>
       </ScrollView>
 
       <View style={styles.footer}>
         <Pressable
-          style={[styles.placeOrderButton, isPending && styles.buttonDisabled]}
+          style={[
+            styles.placeOrderButton,
+            (isPending || locating || validatingOffer) && styles.buttonDisabled,
+          ]}
           onPress={handlePlaceOrder}
-          disabled={isPending}
+          disabled={isPending || locating || validatingOffer}
         >
           {isPending ? (
             <ActivityIndicator color="#fff" />
@@ -327,7 +512,7 @@ export default function CustomerCartScreen() {
             <View style={styles.placeOrderContent}>
               <AppIcon name="shoppingCart" size="sm" color="#FFFFFF" />
               <Text style={styles.placeOrderText}>
-                Place order · {formatPrice(totalPrice())}
+                Continue to payment · {formatCurrency(quotedTotal)}
               </Text>
             </View>
           )}
@@ -336,15 +521,7 @@ export default function CustomerCartScreen() {
       <LocationPicker
         initialCoordinates={deliveryCoords}
         onClose={() => setMapPickerVisible(false)}
-        onConfirm={(coordinates) => {
-          setDeliveryCoords(coordinates);
-          setMapPickerVisible(false);
-          void getAddressForCoordinates(coordinates)
-            .then((detectedAddress) => {
-              if (detectedAddress) setDeliveryAddress(detectedAddress);
-            })
-            .catch(() => undefined);
-        }}
+        onConfirm={(coordinates) => void handleMapLocationConfirm(coordinates)}
         title="Delivery location"
         visible={isMapPickerVisible}
       />
@@ -500,6 +677,96 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 16,
   },
+  offerBox: {
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
+    borderWidth: 1,
+    marginBottom: 16,
+    padding: 13,
+  },
+  offerInputRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  offerInput: {
+    backgroundColor: brand.colors.light.canvas,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.small,
+    borderWidth: 1,
+    color: brand.colors.light.ink,
+    flex: 1,
+    fontSize: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+  },
+  offerApplyButton: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.ink,
+    borderRadius: brand.radius.small,
+    justifyContent: "center",
+    minWidth: 68,
+    paddingHorizontal: 10,
+  },
+  offerApplyText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  offerHint: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 11,
+    marginTop: 8,
+  },
+  appliedOffer: {
+    alignItems: "center",
+    backgroundColor: "#E7F6F0",
+    borderRadius: brand.radius.small,
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 10,
+    padding: 10,
+  },
+  appliedOfferCopy: {
+    flex: 1,
+  },
+  appliedOfferTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  appliedOfferDetail: {
+    color: brand.colors.light.mint,
+    fontSize: 10,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  offerSaving: {
+    alignItems: "flex-end",
+  },
+  offerSavingLabel: {
+    color: brand.colors.light.mint,
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  offerSavingValue: {
+    color: brand.colors.light.mint,
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+  removeOfferText: {
+    color: brand.colors.light.danger,
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  offerError: {
+    color: brand.colors.light.danger,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 8,
+  },
   labelRow: {
     alignItems: "center",
     flexDirection: "row",
@@ -578,6 +845,20 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "800",
     color: brand.colors.light.ink,
+  },
+  totalCopy: {
+    alignItems: "flex-end",
+  },
+  summarySubtotal: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 11,
+    textDecorationLine: "line-through",
+  },
+  summarySaving: {
+    color: brand.colors.light.mint,
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 4,
   },
   footer: {
     position: "absolute",

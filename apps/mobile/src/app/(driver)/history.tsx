@@ -16,10 +16,12 @@ import {
 
 import { WasilLogo } from '@/components/wasil-brand';
 import { AppIcon } from '@/components/wasil-icon-system';
+import { RequestErrorState } from '@/components/request-error-state';
 import { OrderStatusChip } from '@/components/wasil-ui-components';
 import { brand } from '@/constants/brand';
 import { BottomTabInset } from '@/constants/theme';
 import { api } from '@/lib/axios';
+import { formatCurrency } from '@/lib/format';
 
 type OrderItem = {
   id: string;
@@ -38,11 +40,6 @@ type DriverOrder = {
   items?: OrderItem[];
 };
 
-function formatPrice(price: string) {
-  const value = Number.parseFloat(price);
-  return Number.isNaN(value) ? price : `$${value.toFixed(2)}`;
-}
-
 function formatOrderDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Recently';
@@ -58,6 +55,8 @@ function formatOrderDate(value: string) {
 export default function DriverHistoryScreen() {
   const {
     data: orders = [],
+    error,
+    isError,
     isLoading,
     isFetching,
     refetch,
@@ -164,6 +163,12 @@ export default function DriverHistoryScreen() {
               />
               <Text style={styles.emptyText}>Loading history…</Text>
             </View>
+          ) : isError ? (
+            <RequestErrorState
+              error={error}
+              onRetry={() => void refetch()}
+              title="Couldn’t load delivery history"
+            />
           ) : (
             <View style={styles.emptyCard}>
               <View style={styles.emptyOrbOuter}>
@@ -237,7 +242,7 @@ export default function DriverHistoryScreen() {
 
             <View style={styles.cardFooter}>
               <Text style={styles.footerLabel}>Order total</Text>
-              <Text style={styles.total}>{formatPrice(item.totalAmount)}</Text>
+              <Text style={styles.total}>{formatCurrency(item.totalAmount)}</Text>
             </View>
           </View>
         )}

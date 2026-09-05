@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -20,6 +20,7 @@ import {
   getCoordinatesForAddress,
   type Coordinates,
 } from '@/lib/location';
+import { validateCoordinates } from '@/lib/form-validation';
 
 const UAE_REGION: Region = {
   latitude: 24.4539,
@@ -36,7 +37,17 @@ type LocationPickerProps = {
   visible: boolean;
 };
 
-export function LocationPicker({
+export function LocationPicker(props: LocationPickerProps) {
+  // A location picker is a short-lived draft. Giving the draft a fresh
+  // component instance on each open avoids copying props into state in an
+  // effect, and prevents a pin from an earlier session leaking into the next.
+  const { initialCoordinates, visible } = props;
+  const draftKey = `${visible}-${initialCoordinates?.latitude ?? 'uae'}-${initialCoordinates?.longitude ?? 'uae'}`;
+
+  return <LocationPickerDraft key={draftKey} {...props} />;
+}
+
+function LocationPickerDraft({
   initialCoordinates,
   onClose,
   onConfirm,
@@ -50,9 +61,6 @@ export function LocationPicker({
   const [isSearching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const mapRef = useRef<MapView>(null);
-  useEffect(() => {
-    if (visible) setSelected(initialCoordinates);
-  }, [initialCoordinates, visible]);
   const initialRegion: Region = initialCoordinates
     ? {
         ...initialCoordinates,
@@ -69,7 +77,9 @@ export function LocationPicker({
     try {
       const coordinates = await getCoordinatesForAddress(search.trim());
       if (!coordinates) {
-        setSearchError('Location not found. Try “Dubai, UAE” or add more detail.');
+        setSearchError(
+          'Location not found. Try “Dubai, UAE” or add more detail. Android needs location permission to search.',
+        );
         return;
       }
       setSelected(coordinates);
@@ -88,19 +98,20 @@ export function LocationPicker({
     <Modal animationType="slide" visible={visible} onRequestClose={onClose}>
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <Pressable onPress={onClose} hitSlop={12}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close map" onPress={onClose} hitSlop={12}>
             <Text style={styles.cancel}>Cancel</Text>
           </Pressable>
           <Text style={styles.title}>{title}</Text>
           <View style={styles.headerSpacer} />
         </View>
 
-        <Text style={styles.hint}>Search a city or address, then tap the map to refine the pin.</Text>
+        <Text style={styles.hint}>Search a city or address, then tap the map to refine the exact pin.</Text>
         <View style={styles.searchRow}>
           <TextInput
             autoCapitalize="words"
             autoCorrect={false}
             clearButtonMode="while-editing"
+            maxLength={200}
             onChangeText={setSearch}
             onSubmitEditing={() => void searchLocation()}
             placeholder="Search city, country, or address"
@@ -110,9 +121,15 @@ export function LocationPicker({
             value={search}
           />
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Search locations"
+            accessibilityState={{ disabled: !search.trim() || isSearching }}
             disabled={!search.trim() || isSearching}
             onPress={() => void searchLocation()}
-            style={styles.searchButton}>
+            style={[
+              styles.searchButton,
+              (!search.trim() || isSearching) && styles.searchButtonDisabled,
+            ]}>
             {isSearching ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
@@ -127,14 +144,26 @@ export function LocationPicker({
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
           ref={mapRef}
           style={styles.map}
-          onPress={(event) => setSelected(event.nativeEvent.coordinate)}>
+          onPress={(event) => {
+            setSelected(event.nativeEvent.coordinate);
+            setSearchError(null);
+          }}>
           {selected ? <Marker coordinate={selected} /> : null}
         </MapView>
 
         <Pressable
           disabled={!selected}
           style={[styles.confirm, !selected && styles.confirmDisabled]}
-          onPress={() => selected && onConfirm(selected)}>
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !selected }}
+          onPress={() => {
+            const validationError = validateCoordinates(selected);
+            if (validationError) {
+              setSearchError(validationError);
+              return;
+            }
+            if (selected) onConfirm(selected);
+          }}>
           <Text style={styles.confirmText}>
             {selected ? 'Use this location' : 'Tap the map to choose a location'}
           </Text>
@@ -181,6 +210,7 @@ const styles = StyleSheet.create({
     minWidth: 74,
     paddingHorizontal: 10,
   },
+  searchButtonDisabled: { opacity: 0.55 },
   searchButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
   searchError: { color: '#B42318', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
   map: { flex: 1 },

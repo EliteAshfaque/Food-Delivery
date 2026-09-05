@@ -18,11 +18,17 @@ import Animated, {
 import { WasilLogo, WasilMark } from '@/components/wasil-brand';
 import { CustomerReviewsList } from '@/components/customer-reviews-list';
 import { AppIcon, type AppIconName } from '@/components/wasil-icon-system';
+import { RequestErrorState } from '@/components/request-error-state';
 import { brand } from '@/constants/brand';
 import { BottomTabInset } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
 import { api } from '@/lib/axios';
-import type { Restaurant, RestaurantReview } from '@food-delivery/types';
+import { getApiErrorMessage } from '@/lib/api-error';
+import {
+  RestaurantModerationStatus,
+  type Restaurant,
+  type RestaurantReview,
+} from '@food-delivery/types';
 
 type ActionRowProps = {
   detail: string;
@@ -83,9 +89,13 @@ export default function OwnerProfileScreen() {
   const enter = (delay: number, duration = 340) =>
     reduceMotion ? undefined : FadeInDown.duration(duration).delay(delay);
 
-  const { data: restaurant, isLoading: restaurantLoading } = useQuery<
-    Restaurant | null
-  >({
+  const {
+    data: restaurant,
+    error: restaurantError,
+    isError: restaurantIsError,
+    isLoading: restaurantLoading,
+    refetch: refetchRestaurant,
+  } = useQuery<Restaurant | null>({
     queryKey: ['my-restaurants'],
     queryFn: () => api.get('/restaurants/mine').then((res) => res.data),
   });
@@ -110,11 +120,14 @@ export default function OwnerProfileScreen() {
       queryClient.invalidateQueries({ queryKey: ['my-restaurants'] });
     },
     onError: (error) => {
-      Alert.alert('Error', error.message);
+      Alert.alert('Could not update restaurant status', getApiErrorMessage(error));
     },
   });
 
   if (!user) return null;
+
+  const restaurantIsApproved =
+    restaurant?.moderationStatus === RestaurantModerationStatus.APPROVED;
 
   const fullName =
     `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || 'Restaurant owner';
@@ -193,6 +206,12 @@ export default function OwnerProfileScreen() {
             <View style={styles.loadingCard}>
               <ActivityIndicator color={brand.colors.light.primary} />
             </View>
+          ) : restaurantIsError ? (
+            <RequestErrorState
+              error={restaurantError}
+              onRetry={() => void refetchRestaurant()}
+              title="Couldn’t load your restaurant"
+            />
           ) : restaurant ? (
             <View style={styles.restaurantCard}>
               <View style={styles.restaurantHeader}>
@@ -217,15 +236,26 @@ export default function OwnerProfileScreen() {
                 <View>
                   <Text style={styles.openLabel}>Accepting orders</Text>
                   <Text style={styles.openHint}>
-                    {restaurant.isOpen
+                    {!restaurantIsApproved
+                      ? 'Waiting for administrator approval'
+                      : restaurant.isOpen
                       ? 'Customers can order now'
                       : 'Restaurant is closed'}
                   </Text>
                 </View>
                 <Switch
                   value={restaurant.isOpen}
-                  onValueChange={() => toggleOpen()}
-                  disabled={togglingOpen}
+                  onValueChange={() => {
+                    if (!restaurantIsApproved) {
+                      Alert.alert(
+                        'Approval required',
+                        'Your restaurant must be approved before it can open to customers.',
+                      );
+                      return;
+                    }
+                    toggleOpen();
+                  }}
+                  disabled={togglingOpen || !restaurantIsApproved}
                   trackColor={{
                     false: '#E5E7EB',
                     true: `${brand.colors.light.mint}88`,

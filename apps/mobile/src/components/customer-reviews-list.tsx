@@ -124,7 +124,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: brand.colors.light.surface,
     borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.lg,
+    borderRadius: brand.radius.large,
     borderWidth: 1,
     gap: 0,
     padding: 16,
@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: brand.colors.light.surface,
     borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.lg,
+    borderRadius: brand.radius.large,
     borderWidth: 1,
     gap: 8,
     paddingHorizontal: 20,

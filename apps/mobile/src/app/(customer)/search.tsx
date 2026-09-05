@@ -15,6 +15,7 @@ import type { Restaurant } from "@food-delivery/types";
 
 import { WasilLogo } from "@/components/wasil-brand";
 import { AppIcon, type FoodIconName } from "@/components/wasil-icon-system";
+import { RequestErrorState } from "@/components/request-error-state";
 import { WasilImage } from "@/components/wasil-image";
 import { brand } from "@/constants/brand";
 import { BottomTabInset } from "@/constants/theme";
@@ -137,8 +138,11 @@ export default function CustomerSearchScreen() {
 
   const {
     data: restaurants = [],
+    error,
+    isError,
     isFetching,
     isLoading,
+    refetch,
   } = useQuery<Restaurant[]>({
     enabled: Boolean(query),
     queryKey: ["restaurant-search", query],
@@ -182,6 +186,7 @@ export default function CustomerSearchScreen() {
                 autoCapitalize="none"
                 autoCorrect={false}
                 clearButtonMode="while-editing"
+                maxLength={100}
                 onChangeText={setSearch}
                 placeholder="Try “shawarma” or “pizza”"
                 placeholderTextColor={brand.colors.light.inkMuted}
@@ -290,7 +295,13 @@ export default function CustomerSearchScreen() {
           </View>
         }
         ListEmptyComponent={
-          hasTypedSearch && !isSearchSettling && !isLoading && !isFetching ? (
+          hasTypedSearch && isError && !isSearchSettling ? (
+            <RequestErrorState
+              error={error}
+              onRetry={() => void refetch()}
+              title="Couldn’t search restaurants"
+            />
+          ) : hasTypedSearch && !isSearchSettling && !isLoading && !isFetching ? (
             <View style={styles.emptyState}>
               <View style={styles.emptyIcon}>
                 <AppIcon

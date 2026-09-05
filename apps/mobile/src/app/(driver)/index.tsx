@@ -18,11 +18,14 @@ import Animated, {
 
 import { WasilLogo } from '@/components/wasil-brand';
 import { AppIcon } from '@/components/wasil-icon-system';
+import { RequestErrorState } from '@/components/request-error-state';
 import { brand } from '@/constants/brand';
 import { BottomTabInset } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
 import { useDriverSocket } from '@/hooks/user-order.socket';
 import { api } from '@/lib/axios';
+import { getApiErrorMessage } from '@/lib/api-error';
+import { formatCurrency } from '@/lib/format';
 import { OrderStatus, type OrderStatus as OrderStatusType } from '@food-delivery/types';
 
 type DriverOrder = {
@@ -40,12 +43,6 @@ type DriverOrder = {
   };
 };
 
-function formatPrice(price: string) {
-  const value = Number.parseFloat(price);
-  if (Number.isNaN(value)) return price;
-  return `$${value.toFixed(2)}`;
-}
-
 export default function DriverHomeScreen() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -55,9 +52,17 @@ export default function DriverHomeScreen() {
     reduceMotion ? undefined : FadeInDown.duration(duration).delay(delay);
 
   const { incomingOrder, clearIncomingOrder } = useDriverSocket(user?.id ?? null);
-  const [pendingOrder, setPendingOrder] = useState<DriverOrder | null>(null);
+  const [dismissedIncomingOrderId, setDismissedIncomingOrderId] = useState<
+    string | null
+  >(null);
 
-  const { data: status, isLoading: statusLoading } = useQuery({
+  const {
+    data: status,
+    error: statusError,
+    isError: statusIsError,
+    isLoading: statusLoading,
+    refetch: refetchStatus,
+  } = useQuery({
     queryKey: ['driver-status'],
     queryFn: () =>
       api.get<{ isOnline: boolean }>('/driver/status').then((res) => res.data),
@@ -65,6 +70,8 @@ export default function DriverHomeScreen() {
 
   const {
     data: activeOrders = [],
+    error: activeOrdersError,
+    isError: activeOrdersIsError,
     isLoading: ordersLoading,
     refetch: refetchActive,
   } = useQuery<DriverOrder[]>({
@@ -80,34 +87,38 @@ export default function DriverHomeScreen() {
       queryClient.invalidateQueries({ queryKey: ['driver-status'] });
     },
     onError: (error) => {
-      Alert.alert('Error', error.message);
+      Alert.alert('Could not update availability', getApiErrorMessage(error));
     },
   });
 
   const { mutate: declineOrder, isPending: declining } = useMutation({
     mutationFn: (orderId: string) =>
       api.post(`/driver/orders/${orderId}/decline`).then((res) => res.data),
-    onSuccess: () => {
-      setPendingOrder(null);
+    onSuccess: (_data, orderId) => {
+      setDismissedIncomingOrderId(orderId);
       clearIncomingOrder();
       queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
     },
     onError: (error) => {
-      Alert.alert('Error', error.message);
+      Alert.alert('Could not decline delivery', getApiErrorMessage(error));
     },
   });
 
   useEffect(() => {
     if (!incomingOrder?.id) return;
-    setPendingOrder(incomingOrder as unknown as DriverOrder);
     void refetchActive();
   }, [incomingOrder, refetchActive]);
+
+  const pendingOrder =
+    incomingOrder?.id && incomingOrder.id !== dismissedIncomingOrderId
+      ? (incomingOrder as unknown as DriverOrder)
+      : null;
 
   const isOnline = status?.isOnline ?? false;
   const activeOrder = activeOrders[0] ?? null;
 
   function handleAccept() {
-    setPendingOrder(null);
+    if (pendingOrder) setDismissedIncomingOrderId(pendingOrder.id);
     clearIncomingOrder();
     void refetchActive();
     router.push('/(driver)/active');
@@ -206,7 +217,7 @@ export default function DriverHomeScreen() {
                   Deliver to {activeOrder.deliveryAddress}
                 </Text>
                 <Text style={styles.routeTotal}>
-                  {formatPrice(activeOrder.totalAmount)}
+                  {formatCurrency(activeOrder.totalAmount)}
                 </Text>
               </>
             ) : (
@@ -241,6 +252,17 @@ export default function DriverHomeScreen() {
             </Pressable>
           </Animated.View>
         ) : null}
+
+        {statusIsError || activeOrdersIsError ? (
+          <RequestErrorState
+            error={statusError ?? activeOrdersError}
+            onRetry={() => {
+              void refetchStatus();
+              void refetchActive();
+            }}
+            title="Some delivery information is unavailable"
+          />
+        ) : null}
       </ScrollView>
 
       <Modal visible={!!pendingOrder} transparent animationType="slide">
@@ -252,7 +274,7 @@ export default function DriverHomeScreen() {
               {pendingOrder?.deliveryAddress ?? 'Delivery address'}
             </Text>
             <Text style={styles.modalTotal}>
-              {pendingOrder ? formatPrice(pendingOrder.totalAmount) : ''}
+              {pendingOrder ? formatCurrency(pendingOrder.totalAmount) : ''}
             </Text>
 
             <View style={styles.modalActions}>

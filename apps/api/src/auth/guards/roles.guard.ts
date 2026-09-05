@@ -27,7 +27,7 @@ export class RolesGuard implements CanActivate {
       .switchToHttp()
       .getRequest<Request & { user?: JwtPayload }>();
 
-    if (!user || !requiredRoles.includes(user.role as UserRole)) {
+    if (!user || !requiredRoles.includes(user.role)) {
       throw new ForbiddenException('Insufficient role');
     }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,67 +12,105 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { router } from 'expo-router';
-import type { Restaurant } from '@food-delivery/types';
+} from "react-native";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { router } from "expo-router";
+import type { Restaurant } from "@food-delivery/types";
 
-import { api } from '@/lib/axios';
+import { api } from "@/lib/axios";
 import {
   getAddressForCoordinates,
   getCurrentCoordinates,
   type Coordinates,
-} from '@/lib/location';
-import { LocationPicker } from '@/components/location-picker';
-import { useImageUploader } from '../../../lib/uploadthing';
+} from "@/lib/location";
+import { LocationPicker } from "@/components/location-picker";
+import { RequestErrorState } from "@/components/request-error-state";
+import { getApiErrorMessage } from "@/lib/api-error";
+import {
+  validateCoordinates,
+  validateRestaurantDetails,
+} from "@/lib/form-validation";
+import { useImageUploader } from "../../../lib/uploadthing";
+
+type RestaurantDraft = {
+  address?: string;
+  coordinates?: Coordinates | null;
+  cuisineType?: string;
+  description?: string;
+  imageUrl?: string | null;
+  name?: string;
+};
+
+function coordinatesFromRestaurant(restaurant: Restaurant | null | undefined) {
+  return restaurant?.latitude != null && restaurant.longitude != null
+    ? { latitude: restaurant.latitude, longitude: restaurant.longitude }
+    : null;
+}
 
 export default function UpdateRestaurantScreen() {
   const queryClient = useQueryClient();
-  const { data: restaurant, isLoading } = useQuery<Restaurant | null>({
-    queryKey: ['my-restaurants'],
-    queryFn: () => api.get('/restaurants/mine').then((res) => res.data),
+  const {
+    data: restaurant,
+    error: restaurantError,
+    isError: restaurantIsError,
+    isLoading,
+    refetch: refetchRestaurant,
+  } = useQuery<Restaurant | null>({
+    queryKey: ["my-restaurants"],
+    queryFn: () => api.get("/restaurants/mine").then((res) => res.data),
   });
 
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [address, setAddress] = useState('');
-  const [cuisineType, setCuisineType] = useState('');
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
+  // Keep only operator changes in local state. The untouched values are
+  // derived from the query result, which avoids an effect that copies API data
+  // into state and can overwrite a draft during a background refetch.
+  const [draft, setDraft] = useState<RestaurantDraft>({});
+  const name = draft.name ?? restaurant?.name ?? "";
+  const description = draft.description ?? restaurant?.description ?? "";
+  const address = draft.address ?? restaurant?.address ?? "";
+  const cuisineType = draft.cuisineType ?? restaurant?.cuisineType ?? "";
+  const imageUrl = Object.hasOwn(draft, "imageUrl")
+    ? (draft.imageUrl ?? null)
+    : (restaurant?.imageUrl ?? null);
+  const coordinates = Object.hasOwn(draft, "coordinates")
+    ? (draft.coordinates ?? null)
+    : coordinatesFromRestaurant(restaurant);
+  const setName = (value: string) =>
+    setDraft((current) => ({ ...current, name: value }));
+  const setDescription = (value: string) =>
+    setDraft((current) => ({ ...current, description: value }));
+  const setAddress = (value: string) =>
+    setDraft((current) => ({ ...current, address: value }));
+  const setCuisineType = (value: string) =>
+    setDraft((current) => ({ ...current, cuisineType: value }));
+  const setImageUrl = (value: string | null) =>
+    setDraft((current) => ({ ...current, imageUrl: value }));
+  const setCoordinates = (value: Coordinates | null) =>
+    setDraft((current) => ({ ...current, coordinates: value }));
   const [locating, setLocating] = useState(false);
   const [isMapPickerVisible, setMapPickerVisible] = useState(false);
 
-  useEffect(() => {
-    if (!restaurant) return;
-    setName(restaurant.name ?? '');
-    setDescription(restaurant.description ?? '');
-    setAddress(restaurant.address ?? '');
-    setCuisineType(restaurant.cuisineType ?? '');
-    setImageUrl(restaurant.imageUrl ?? null);
-    setCoordinates(
-      restaurant.latitude != null && restaurant.longitude != null
-        ? { latitude: restaurant.latitude, longitude: restaurant.longitude }
-        : null,
-    );
-  }, [restaurant]);
-
-  const { openImagePicker, isUploading } = useImageUploader('restaurantImage', {
+  const { openImagePicker, isUploading } = useImageUploader("restaurantImage", {
     onClientUploadComplete: (result) => {
-      setImageUrl(result[0].url);
-      Alert.alert('Image uploaded successfully');
+      const image = result[0];
+      if (!image?.url) {
+        Alert.alert("Image upload failed", "Please choose the image again.");
+        return;
+      }
+      setImageUrl(image.url);
+      Alert.alert("Image uploaded successfully");
     },
     onUploadError: (error: Error) => {
-      Alert.alert('Error While Uploading Image', error.message);
+      Alert.alert("Image upload failed", getApiErrorMessage(error));
     },
   });
 
   const { mutate: updateRestaurant, isPending } = useMutation({
     mutationFn: async () => {
       const { data } = await api.patch(`/restaurants/${restaurant?.id}`, {
-        name,
-        description,
-        address,
-        cuisineType,
+        name: name.trim(),
+        description: description.trim() || undefined,
+        address: address.trim(),
+        cuisineType: cuisineType.trim(),
         imageUrl,
         latitude: coordinates?.latitude,
         longitude: coordinates?.longitude,
@@ -80,38 +118,64 @@ export default function UpdateRestaurantScreen() {
       return data;
     },
     onSuccess: (updated) => {
-      queryClient.setQueryData(['my-restaurants'], updated);
-      Alert.alert('Restaurant updated successfully', '', [
+      queryClient.setQueryData(["my-restaurants"], updated);
+      Alert.alert("Restaurant updated successfully", "", [
         {
-          text: 'OK',
+          text: "OK",
           onPress: goHome,
         },
       ]);
     },
     onError: (error) => {
-      Alert.alert('Error While Updating Restaurant', error.message);
+      Alert.alert("Could not update restaurant", getApiErrorMessage(error));
     },
   });
 
   function handleSubmit() {
-    if (!name.trim() || !address.trim() || !cuisineType.trim()) {
-      Alert.alert('Please fill all fields');
+    if (!restaurant?.id) {
+      Alert.alert("Restaurant unavailable", "Refresh the page and try again.");
       return;
     }
+
+    const detailsError = validateRestaurantDetails({
+      name,
+      description,
+      address,
+      cuisineType,
+    });
+    if (detailsError) {
+      Alert.alert("Check restaurant details", detailsError);
+      return;
+    }
+
+    if (coordinates) {
+      const coordinateError = validateCoordinates(coordinates);
+      if (coordinateError) {
+        Alert.alert("Check restaurant location", coordinateError);
+        return;
+      }
+    }
+
     updateRestaurant();
   }
 
   function pickImage() {
+    if (!restaurant?.id) {
+      Alert.alert("Restaurant unavailable", "Refresh the page and try again.");
+      return;
+    }
+
     void openImagePicker({
-      source: 'library',
+      source: "library",
+      input: { restaurantId: restaurant.id },
       onInsufficientPermissions: () => {
         Alert.alert(
-          'No permissions',
-          'You need to grant permission to your Photos',
+          "No permissions",
+          "You need to grant permission to your Photos",
           [
-            { text: 'Dismiss' },
+            { text: "Dismiss" },
             {
-              text: 'Open Settings',
+              text: "Open Settings",
               onPress: () => void Linking.openSettings(),
             },
           ],
@@ -120,22 +184,35 @@ export default function UpdateRestaurantScreen() {
     });
   }
 
-  async function useCurrentLocation() {
+  async function requestCurrentLocation() {
     setLocating(true);
     try {
       const coords = await getCurrentCoordinates();
       if (!coords) {
-        Alert.alert('Location not shared', 'You can keep your existing restaurant pin.');
+        Alert.alert(
+          "Location not shared",
+          "You can keep your existing restaurant pin.",
+        );
         return;
       }
       setCoordinates(coords);
       const detectedAddress = await getAddressForCoordinates(coords).catch(
         () => null,
       );
-      if (detectedAddress) setAddress(detectedAddress);
+      if (detectedAddress) {
+        setAddress(detectedAddress);
+      } else {
+        Alert.alert(
+          "Location pin selected",
+          "Add the street, building, or area so drivers can find your restaurant.",
+        );
+      }
       setMapPickerVisible(true);
     } catch {
-      Alert.alert('Location unavailable', 'Please check your device location settings and try again.');
+      Alert.alert(
+        "Location unavailable",
+        "Please check your device location settings and try again.",
+      );
     } finally {
       setLocating(false);
     }
@@ -148,7 +225,7 @@ export default function UpdateRestaurantScreen() {
       router.back();
       return;
     }
-    router.replace('/(owner)/(index)');
+    router.replace("/(owner)/(index)");
   }
 
   if (isLoading) {
@@ -159,13 +236,38 @@ export default function UpdateRestaurantScreen() {
     );
   }
 
+  if (restaurantIsError && !restaurant) {
+    return (
+      <View style={styles.loading}>
+        <RequestErrorState
+          error={restaurantError}
+          onRetry={() => void refetchRestaurant()}
+          title="Couldn’t load your restaurant"
+        />
+      </View>
+    );
+  }
+
+  if (!restaurant) {
+    return (
+      <View style={styles.loading}>
+        <Text style={styles.emptyTitle}>Restaurant not found</Text>
+        <Pressable style={styles.button} onPress={goHome}>
+          <Text style={styles.buttonText}>Back to dashboard</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
       <ScrollView
         contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled">
+        keyboardShouldPersistTaps="handled"
+      >
         <Pressable style={styles.back} onPress={goHome} hitSlop={12}>
           <Text style={styles.backText}>Back</Text>
         </Pressable>
@@ -180,13 +282,14 @@ export default function UpdateRestaurantScreen() {
         <Pressable
           style={styles.imagePicker}
           onPress={pickImage}
-          disabled={isBusy}>
+          disabled={isBusy}
+        >
           {imageUrl ? (
             <>
               <Image source={{ uri: imageUrl }} style={styles.image} />
               <View style={styles.imageOverlay}>
                 <Text style={styles.imageOverlayText}>
-                  {isUploading ? 'Uploading…' : 'Change photo'}
+                  {isUploading ? "Uploading…" : "Change photo"}
                 </Text>
               </View>
             </>
@@ -200,7 +303,9 @@ export default function UpdateRestaurantScreen() {
                     <Text style={styles.imageIconText}>+</Text>
                   </View>
                   <Text style={styles.imagePickerTitle}>Add cover photo</Text>
-                  <Text style={styles.imagePickerHint}>Tap to upload from gallery</Text>
+                  <Text style={styles.imagePickerHint}>
+                    Tap to upload from gallery
+                  </Text>
                 </>
               )}
             </View>
@@ -210,6 +315,9 @@ export default function UpdateRestaurantScreen() {
         <View style={styles.field}>
           <Text style={styles.label}>Restaurant name</Text>
           <TextInput
+            autoCapitalize="words"
+            autoCorrect={false}
+            maxLength={100}
             style={styles.input}
             placeholder="e.g. Spice Garden"
             placeholderTextColor="#999"
@@ -221,6 +329,8 @@ export default function UpdateRestaurantScreen() {
         <View style={styles.field}>
           <Text style={styles.label}>Description</Text>
           <TextInput
+            autoCapitalize="sentences"
+            maxLength={500}
             style={[styles.input, styles.multiline]}
             placeholder="Tell customers what you serve"
             placeholderTextColor="#999"
@@ -234,6 +344,8 @@ export default function UpdateRestaurantScreen() {
         <View style={styles.field}>
           <Text style={styles.label}>Address</Text>
           <TextInput
+            autoCapitalize="words"
+            maxLength={300}
             style={styles.input}
             placeholder="Street, city"
             placeholderTextColor="#999"
@@ -242,21 +354,23 @@ export default function UpdateRestaurantScreen() {
           />
           <Pressable
             style={styles.locationButton}
-            onPress={() => void useCurrentLocation()}
-            disabled={locating}>
+            onPress={() => void requestCurrentLocation()}
+            disabled={locating}
+          >
             {locating ? (
               <ActivityIndicator color="#FF6B35" />
             ) : (
               <Text style={styles.locationButtonText}>
                 {coordinates
-                  ? 'Update restaurant map pin'
-                  : 'Use my current restaurant location'}
+                  ? "Update restaurant map pin"
+                  : "Use my current restaurant location"}
               </Text>
             )}
           </Pressable>
           <Pressable
             style={styles.mapButton}
-            onPress={() => setMapPickerVisible(true)}>
+            onPress={() => setMapPickerVisible(true)}
+          >
             <Text style={styles.mapButtonText}>
               Choose restaurant location on map
             </Text>
@@ -269,6 +383,8 @@ export default function UpdateRestaurantScreen() {
         <View style={styles.field}>
           <Text style={styles.label}>Cuisine type</Text>
           <TextInput
+            autoCapitalize="words"
+            maxLength={100}
             style={styles.input}
             placeholder="e.g. Italian, Chinese"
             placeholderTextColor="#999"
@@ -280,7 +396,8 @@ export default function UpdateRestaurantScreen() {
         <Pressable
           style={[styles.button, isBusy && styles.buttonDisabled]}
           onPress={handleSubmit}
-          disabled={isBusy}>
+          disabled={isBusy}
+        >
           {isPending ? (
             <ActivityIndicator color="#fff" />
           ) : (
@@ -296,10 +413,21 @@ export default function UpdateRestaurantScreen() {
           setMapPickerVisible(false);
           void getAddressForCoordinates(selected)
             .then((detectedAddress) => {
-              if (detectedAddress) setAddress(detectedAddress);
+              if (detectedAddress) {
+                setAddress(detectedAddress);
+                return;
+              }
+              Alert.alert(
+                "Map pin selected",
+                "Add the street, building, or area before saving changes.",
+              );
             })
-            .catch(() => undefined);
-          Alert.alert('Map pin selected', 'Tap Save changes to update your restaurant location.');
+            .catch(() =>
+              Alert.alert(
+                "Map pin selected",
+                "Add the street, building, or area before saving changes.",
+              ),
+            );
         }}
         title="Restaurant location"
         visible={isMapPickerVisible}
@@ -311,13 +439,19 @@ export default function UpdateRestaurantScreen() {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   loading: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff',
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+  },
+  emptyTitle: {
+    color: "#111",
+    fontSize: 20,
+    fontWeight: "700",
+    marginBottom: 16,
   },
   container: {
     flexGrow: 1,
@@ -326,129 +460,129 @@ const styles = StyleSheet.create({
   },
   back: {
     marginBottom: 16,
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
   },
   backText: {
     fontSize: 16,
-    color: '#FF6B35',
-    fontWeight: '600',
+    color: "#FF6B35",
+    fontWeight: "600",
   },
   header: {
     marginBottom: 24,
   },
   title: {
     fontSize: 28,
-    fontWeight: '700',
-    color: '#111',
+    fontWeight: "700",
+    color: "#111",
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
+    color: "#666",
     lineHeight: 22,
   },
   imagePicker: {
     height: 200,
     borderRadius: 16,
-    backgroundColor: '#FFF4EF',
+    backgroundColor: "#FFF4EF",
     borderWidth: 1.5,
-    borderColor: '#FFD4C2',
+    borderColor: "#FFD4C2",
     marginBottom: 24,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   image: {
-    width: '100%',
-    height: '100%',
+    width: "100%",
+    height: "100%",
   },
   imageOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   imageOverlayText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   imagePlaceholder: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     gap: 8,
   },
   imageIcon: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#FF6B35',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#FF6B35",
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 4,
   },
   imageIconText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 28,
-    fontWeight: '600',
+    fontWeight: "600",
     lineHeight: 30,
   },
   imagePickerTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#111',
+    fontWeight: "600",
+    color: "#111",
   },
   imagePickerHint: {
     fontSize: 13,
-    color: '#888',
+    color: "#888",
   },
   field: {
     marginBottom: 16,
   },
   label: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: "600",
+    color: "#333",
     marginBottom: 8,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: "#ddd",
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 14,
     fontSize: 16,
-    backgroundColor: '#fafafa',
-    color: '#111',
+    backgroundColor: "#fafafa",
+    color: "#111",
   },
   locationButton: {
-    alignItems: 'center',
-    borderColor: '#FF6B35',
+    alignItems: "center",
+    borderColor: "#FF6B35",
     borderRadius: 10,
     borderWidth: 1,
     marginTop: 10,
     padding: 12,
   },
-  locationButtonText: { color: '#FF6B35', fontWeight: '600' },
-  mapButton: { alignItems: 'center', marginTop: 10, padding: 8 },
-  mapButtonText: { color: '#444', fontWeight: '600' },
-  locationHint: { color: '#666', fontSize: 12, lineHeight: 17, marginTop: 8 },
+  locationButtonText: { color: "#FF6B35", fontWeight: "600" },
+  mapButton: { alignItems: "center", marginTop: 10, padding: 8 },
+  mapButtonText: { color: "#444", fontWeight: "600" },
+  locationHint: { color: "#666", fontSize: 12, lineHeight: 17, marginTop: 8 },
   multiline: {
     minHeight: 96,
     paddingTop: 14,
   },
   button: {
-    backgroundColor: '#FF6B35',
+    backgroundColor: "#FF6B35",
     borderRadius: 10,
     padding: 16,
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: 8,
   },
   buttonDisabled: {
     opacity: 0.7,
   },
   buttonText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

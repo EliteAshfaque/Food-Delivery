@@ -20,9 +20,12 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { api } from "@/lib/axios";
+import { getApiErrorMessage } from "@/lib/api-error";
+import { formatCurrency } from "@/lib/format";
 import { usePaymentSheet } from "@/hooks/use-payment-sheet";
 import { useOrderSocket, useDriverLocation } from "@/hooks/user-order.socket";
 import { OrderTrackingMap } from "@/components/order-tracking-map";
+import { RequestErrorState } from "@/components/request-error-state";
 import {
   OrderStatus,
   type MenuItem,
@@ -114,12 +117,6 @@ const STATUS_STEPS: {
 ];
 
 const PROGRESS_CONNECTOR_HEIGHT = 46;
-
-function formatPrice(price: string | number) {
-  const value = typeof price === "number" ? price : Number.parseFloat(price);
-  if (Number.isNaN(value)) return String(price);
-  return `$${value.toFixed(2)}`;
-}
 
 function getStatusIndex(status: OrderStatusType) {
   if (status === "CANCELLED") return -1;
@@ -437,6 +434,8 @@ export default function OrderDetailScreen() {
 
   const {
     data: order,
+    error: orderError,
+    isError: orderIsError,
     isLoading,
     isFetching,
     refetch,
@@ -479,7 +478,7 @@ export default function OrderDetailScreen() {
 
     // Keep an already-cached customer order list in sync too. This avoids a
     // stale status when the customer navigates back from the tracking screen.
-    queryClient.setQueryData<Array<Omit<OrderDetail, "items">> | undefined>(
+    queryClient.setQueryData<Omit<OrderDetail, "items">[] | undefined>(
       ["my-orders"],
       (current) =>
         current?.map((cachedOrder) =>
@@ -515,6 +514,11 @@ export default function OrderDetailScreen() {
   const handlePayment = useCallback(async () => {
     if (!order) return;
 
+    if (order.status !== OrderStatus.PENDING) {
+      Alert.alert('Payment unavailable', 'This order is no longer awaiting payment.');
+      return;
+    }
+
     if (!isSupported) {
       Alert.alert(
         "Use the mobile app",
@@ -548,7 +552,13 @@ export default function OrderDetailScreen() {
       });
 
       if (initError) {
-        Alert.alert("Payment error", initError.message);
+        Alert.alert(
+          "Payment error",
+          getApiErrorMessage(
+            initError,
+            "We couldn't prepare secure payment. Please try again.",
+          ),
+        );
         return;
       }
 
@@ -556,20 +566,33 @@ export default function OrderDetailScreen() {
 
       if (presentError) {
         if (presentError.code !== "Canceled") {
-          Alert.alert("Payment failed", presentError.message);
+          Alert.alert(
+            "Payment failed",
+            getApiErrorMessage(
+              presentError,
+              "Your payment could not be completed. Please try again.",
+            ),
+          );
         }
         return;
       }
 
       setConfirmingPayment(true);
 
-      // Payment sheet dismissed without error — webhook updates order async.
-      // Poll up to 5 times with 1s delay until status is CONFIRMED.
+      // Payment sheet dismissed without error — the server/webhook updates the
+      // order asynchronously. A restaurant may advance the order beyond
+      // CONFIRMED before the next poll, so every non-pending fulfilment state
+      // counts as a successful payment outcome.
       let confirmed = false;
+      let cancelled = false;
       for (let i = 0; i < 5; i++) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         const { data: refreshed } = await refetch();
-        if (refreshed?.status === "CONFIRMED") {
+        if (refreshed?.status === OrderStatus.CANCELLED) {
+          cancelled = true;
+          break;
+        }
+        if (refreshed?.status && refreshed.status !== OrderStatus.PENDING) {
           confirmed = true;
           break;
         }
@@ -579,6 +602,11 @@ export default function OrderDetailScreen() {
 
       if (confirmed) {
         setShowPaymentSuccess(true);
+      } else if (cancelled) {
+        Alert.alert(
+          "Order cancelled",
+          "This order was cancelled before fulfilment. If a payment completed, the refund is being processed.",
+        );
       } else {
         Alert.alert(
           "Payment received",
@@ -586,9 +614,13 @@ export default function OrderDetailScreen() {
         );
       }
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Something went wrong";
-      Alert.alert("Payment error", message);
+      Alert.alert(
+        "Payment error",
+        getApiErrorMessage(
+          error,
+          "We couldn't start secure payment. Please try again.",
+        ),
+      );
     } finally {
       setPaymentLoading(false);
       setConfirmingPayment(false);
@@ -596,7 +628,7 @@ export default function OrderDetailScreen() {
   }, [
     order,
     isSupported,
-    restaurant?.name,
+    restaurant,
     initPaymentSheet,
     presentPaymentSheet,
     queryClient,
@@ -608,6 +640,18 @@ export default function OrderDetailScreen() {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={brand.colors.light.primary} />
+      </View>
+    );
+  }
+
+  if (orderIsError) {
+    return (
+      <View style={styles.centered}>
+        <RequestErrorState
+          error={orderError}
+          onRetry={() => void refetch()}
+          title="Couldn’t load this order"
+        />
       </View>
     );
   }
@@ -696,7 +740,7 @@ export default function OrderDetailScreen() {
               <Text style={styles.paymentTitle}>Secure checkout</Text>
             </View>
             <Text style={styles.paymentText}>
-              Pay {formatPrice(order.totalAmount)} securely with Stripe to
+              Pay {formatCurrency(order.totalAmount)} securely with Stripe to
               confirm your order.
             </Text>
             <View style={styles.paymentFeatures}>
@@ -715,11 +759,14 @@ export default function OrderDetailScreen() {
                   color={brand.colors.light.accent}
                 />
                 <Text style={styles.paymentFeature}>
-                  Card, Apple Pay & Google Pay
+                  Card payment through Stripe
                 </Text>
               </View>
             </View>
             <Pressable
+              accessibilityLabel={`Pay ${formatCurrency(order.totalAmount)}`}
+              accessibilityRole="button"
+              accessibilityState={{ busy: isBusy, disabled: isBusy }}
               style={[styles.payButton, isBusy && styles.buttonDisabled]}
               onPress={() => void handlePayment()}
               disabled={isBusy}
@@ -733,7 +780,7 @@ export default function OrderDetailScreen() {
                 </View>
               ) : (
                 <Text style={styles.payButtonText}>
-                  Pay {formatPrice(order.totalAmount)}
+                  Pay {formatCurrency(order.totalAmount)}
                 </Text>
               )}
             </Pressable>
@@ -782,10 +829,10 @@ export default function OrderDetailScreen() {
                   {menuItem?.name ?? "Menu item"}
                 </Text>
                 <Text style={styles.itemMeta}>
-                  {item.quantity} x {formatPrice(item.price)}
+                  {item.quantity} x {formatCurrency(item.price)}
                 </Text>
               </View>
-              <Text style={styles.itemPrice}>{formatPrice(lineTotal)}</Text>
+              <Text style={styles.itemPrice}>{formatCurrency(lineTotal)}</Text>
             </View>
           );
         })}
@@ -795,7 +842,7 @@ export default function OrderDetailScreen() {
             {isPending ? "Total due" : "Total paid"}
           </Text>
           <Text style={styles.totalValue}>
-            {formatPrice(order.totalAmount)}
+            {formatCurrency(order.totalAmount)}
           </Text>
         </View>
 
@@ -807,7 +854,7 @@ export default function OrderDetailScreen() {
         </Pressable>
       </ScrollView>
       <PaymentSuccessCelebration
-        amount={formatPrice(order.totalAmount)}
+        amount={formatCurrency(order.totalAmount)}
         onComplete={hidePaymentSuccess}
         visible={showPaymentSuccess}
       />

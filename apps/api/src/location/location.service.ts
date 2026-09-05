@@ -22,18 +22,45 @@ export class LocationService {
     latitude: number,
     longitude: number,
   ) {
-    const key = `driver:location:${orderId}`;
+    const key = this.keyFor(orderId);
     await this.redis.set(key, JSON.stringify({ latitude, longitude }), {
       ex: 3600, // expires after 1 hour
     });
   }
 
+  /** Remove a terminal delivery's last-known live position immediately. */
+  async deleteDriverLocation(orderId: string) {
+    await this.redis.del(this.keyFor(orderId));
+  }
+
   // GET /location/:orderId - customer hydrates map before first live tick
   async getDriverLocation(orderId: string): Promise<DriverCoordinates | null> {
-    const key = `driver:location:${orderId}`;
+    const key = this.keyFor(orderId);
     const data = await this.redis.get<string>(key);
     if (!data) return null;
-    return typeof data === 'string' ? JSON.parse(data) : data;
+
+    try {
+      const coordinates: unknown =
+        typeof data === 'string' ? (JSON.parse(data) as unknown) : data;
+      if (this.isDriverCoordinates(coordinates)) {
+        return coordinates;
+      }
+    } catch {
+      // Treat malformed cache data exactly like an absent live-location tick.
+    }
+
+    // Do not repeatedly parse invalid cache data. A cache write is best-effort
+    // here, so a temporary Redis failure does not turn this read into a 500.
+    try {
+      await this.deleteDriverLocation(orderId);
+    } catch {
+      // TTL remains the fallback cleanup mechanism.
+    }
+    return null;
+  }
+
+  private keyFor(orderId: string) {
+    return `driver:location:${orderId}`;
   }
 
   isDriverCoordinates(value: unknown): value is DriverCoordinates {
@@ -43,7 +70,13 @@ export class LocationService {
       'latitude' in value &&
       'longitude' in value &&
       typeof (value as DriverCoordinates).latitude === 'number' &&
-      typeof (value as DriverCoordinates).longitude === 'number'
+      Number.isFinite((value as DriverCoordinates).latitude) &&
+      (value as DriverCoordinates).latitude >= -90 &&
+      (value as DriverCoordinates).latitude <= 90 &&
+      typeof (value as DriverCoordinates).longitude === 'number' &&
+      Number.isFinite((value as DriverCoordinates).longitude) &&
+      (value as DriverCoordinates).longitude >= -180 &&
+      (value as DriverCoordinates).longitude <= 180
     );
   }
 }

@@ -12,9 +12,11 @@ import { useQuery } from "@tanstack/react-query";
 import { router, useLocalSearchParams } from "expo-router";
 
 import { AppIcon } from "@/components/wasil-icon-system";
+import { RequestErrorState } from "@/components/request-error-state";
 import { WasilImage } from "@/components/wasil-image";
 import { brand } from "@/constants/brand";
 import { api } from "@/lib/axios";
+import { formatCurrency } from "@/lib/format";
 import { useCartStore } from "@/store/cart-store";
 import type {
   MenuCategory,
@@ -22,12 +24,6 @@ import type {
   Restaurant,
   RestaurantReview,
 } from "@food-delivery/types";
-
-function formatPrice(price: string | number) {
-  const value = typeof price === "number" ? price : Number.parseFloat(price);
-  if (Number.isNaN(value)) return String(price);
-  return `$${value.toFixed(2)}`;
-}
 
 function formatRating(rating: number | string) {
   const value = typeof rating === "number" ? rating : Number.parseFloat(rating);
@@ -53,24 +49,38 @@ export default function RestaurantDetailScreen() {
     totalPrice,
   } = useCartStore();
 
-  const { data: restaurant, isLoading: restaurantLoading } =
+  const {
+    data: restaurant,
+    error: restaurantError,
+    isError: restaurantIsError,
+    isLoading: restaurantLoading,
+    refetch: refetchRestaurant,
+  } =
     useQuery<Restaurant | null>({
       queryKey: ["restaurant", id],
       queryFn: () => api.get(`/restaurants/${id}`).then((res) => res.data),
       enabled: Boolean(id),
     });
 
-  const { data: categories = [], isLoading: categoriesLoading } = useQuery<
-    MenuCategory[]
-  >({
+  const {
+    data: categories = [],
+    error: categoriesError,
+    isError: categoriesIsError,
+    isLoading: categoriesLoading,
+    refetch: refetchCategories,
+  } = useQuery<MenuCategory[]>({
     queryKey: ["menu-categories", id],
     queryFn: () => api.get(`/menu/categories/${id}`).then((res) => res.data),
     enabled: Boolean(id),
   });
 
-  const { data: menuItems = [], isLoading: itemsLoading } = useQuery<
-    MenuItem[]
-  >({
+  const {
+    data: menuItems = [],
+    error: menuItemsError,
+    isError: menuItemsIsError,
+    isLoading: itemsLoading,
+    refetch: refetchMenuItems,
+  } = useQuery<MenuItem[]>({
     queryKey: ["menu-items", id],
     queryFn: () => api.get(`/menu/items/${id}`).then((res) => res.data),
     enabled: Boolean(id),
@@ -121,6 +131,13 @@ export default function RestaurantDetailScreen() {
 
   function addToCart(menuItem: MenuItem) {
     if (!restaurant) return;
+    if (!restaurant.isOpen || !menuItem.isAvailable) {
+      Alert.alert(
+        'Item unavailable',
+        'This restaurant is not accepting orders right now. Please try another restaurant.',
+      );
+      return;
+    }
 
     const cartItem = {
       id: menuItem.id,
@@ -166,6 +183,22 @@ export default function RestaurantDetailScreen() {
         </View>
         <ActivityIndicator color={brand.colors.light.primary} size="small" />
         <Text style={styles.loadingText}>Setting the table…</Text>
+      </View>
+    );
+  }
+
+  if (restaurantIsError || categoriesIsError || menuItemsIsError) {
+    return (
+      <View style={styles.centered}>
+        <RequestErrorState
+          error={restaurantError ?? categoriesError ?? menuItemsError}
+          onRetry={() => {
+            void refetchRestaurant();
+            void refetchCategories();
+            void refetchMenuItems();
+          }}
+          title="Couldn’t load this restaurant"
+        />
       </View>
     );
   }
@@ -481,7 +514,7 @@ export default function RestaurantDetailScreen() {
                           </Text>
                         ) : null}
                         <Text style={styles.menuPrice}>
-                          {formatPrice(item.price)}
+                          {formatCurrency(item.price)}
                         </Text>
                       </View>
 
@@ -510,11 +543,14 @@ export default function RestaurantDetailScreen() {
                           <Pressable
                             accessibilityLabel={`Add one ${item.name}`}
                             accessibilityRole="button"
+                            accessibilityState={{ disabled: !restaurant.isOpen }}
+                            disabled={!restaurant.isOpen}
                             hitSlop={4}
                             onPress={() => incrementItem(item.id)}
                             style={({ pressed }) => [
                               styles.qtyButton,
-                              pressed && styles.pressed,
+                              pressed && restaurant.isOpen && styles.pressed,
+                              !restaurant.isOpen && styles.qtyButtonDisabled,
                             ]}
                           >
                             <AppIcon
@@ -551,7 +587,7 @@ export default function RestaurantDetailScreen() {
 
       {cartCount > 0 ? (
         <Pressable
-          accessibilityLabel={`View cart, ${cartCount} items, ${formatPrice(cartTotal)}`}
+          accessibilityLabel={`View cart, ${cartCount} items, ${formatCurrency(cartTotal)}`}
           accessibilityRole="button"
           onPress={() => router.push("/(customer)/cart")}
           style={({ pressed }) => [
@@ -566,7 +602,7 @@ export default function RestaurantDetailScreen() {
             <Text style={styles.cartBarText}>View cart</Text>
             <Text style={styles.cartBarHint}>Ready when you are</Text>
           </View>
-          <Text style={styles.cartBarPrice}>{formatPrice(cartTotal)}</Text>
+          <Text style={styles.cartBarPrice}>{formatCurrency(cartTotal)}</Text>
           <AppIcon color="#FFFFFF" name="navigation" size="sm" />
         </Pressable>
       ) : null}
@@ -925,6 +961,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 28,
   },
+  qtyButtonDisabled: { opacity: 0.35 },
   qtyValue: {
     color: brand.colors.light.ink,
     fontSize: 13,

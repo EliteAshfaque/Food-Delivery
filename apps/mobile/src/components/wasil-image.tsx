@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import {
   Image,
@@ -29,9 +29,29 @@ export function WasilImage({
   style,
   uri,
 }: WasilImageProps) {
-  const [failed, setFailed] = useState(false);
+  // An image failure belongs to a particular URI. Remount the small inner
+  // component when its source changes so a successful replacement never
+  // inherits the previous source's failure state.
+  return (
+    <WasilImageContent
+      key={uri ?? "image-placeholder"}
+      accessibilityLabel={accessibilityLabel}
+      contentFit={contentFit}
+      contentPosition={contentPosition}
+      style={style}
+      uri={uri}
+    />
+  );
+}
 
-  useEffect(() => setFailed(false), [uri]);
+function WasilImageContent({
+  accessibilityLabel,
+  contentFit,
+  contentPosition,
+  style,
+  uri,
+}: WasilImageProps) {
+  const [failed, setFailed] = useState(false);
 
   const canDisplay = Boolean(uri) && !failed;
 

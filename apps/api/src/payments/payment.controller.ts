@@ -30,7 +30,7 @@ export class PaymentsController {
     @Request() req: AuthRequest,
     @Body() dto: CreatePaymentIntentDto,
   ) {
-    return this.paymentsService.createPaymentIntent(dto.orderId);
+    return this.paymentsService.createPaymentIntent(dto.orderId, req.user.sub);
   }
 
   @Post('webhook')
@@ -50,4 +50,3 @@ export class PaymentsController {
     return this.paymentsService.handleWebhook(rawBody, signature);
   }
 }
- 

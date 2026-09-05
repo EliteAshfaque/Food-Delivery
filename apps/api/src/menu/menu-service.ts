@@ -1,172 +1,289 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
-import type { NeonHttpDatabase } from 'drizzle-orm/neon-http';
+import { and, eq, ne, sql } from 'drizzle-orm';
+import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
 import type { schema as RelationsSchema } from '../db/relations';
 import * as schema from '../db/schema';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { CreateMenuItemDto } from './dto/create-menu.dto';
 import { UpdateMenuItemDto } from './dto/update-menu.dto';
+import { isPostgresUniqueViolation } from '../db/is-unique-violation';
 @Injectable()
 export class MenuService {
-    constructor( 
-        @Inject('DB') private db: NeonHttpDatabase<typeof RelationsSchema>,
-    ) {}
-    private async getRestaurantByOwner(ownerId: string) {
-        const [restaurant] = await this.db
-            .select()
-            .from(schema.restaurants)
-            .where(eq(schema.restaurants.ownerId, ownerId));
-    
-        if (!restaurant) throw new NotFoundException('Create a restaurant first');
-    
-        return restaurant;
+  constructor(@Inject('DB') private db: NeonDatabase<typeof RelationsSchema>) {}
+  private async getRestaurantByOwner(ownerId: string) {
+    const [restaurant] = await this.db
+      .select()
+      .from(schema.restaurants)
+      .where(eq(schema.restaurants.ownerId, ownerId));
+
+    if (!restaurant) throw new NotFoundException('Create a restaurant first');
+
+    return restaurant;
+  }
+
+  // ==================== CATEGORIES ====================
+
+  async createCategory(ownerId: string, dto: CreateCategoryDto) {
+    const restaurant = await this.getRestaurantByOwner(ownerId);
+
+    const [existing] = await this.db
+      .select({ id: schema.menuCategories.id })
+      .from(schema.menuCategories)
+      .where(
+        and(
+          eq(schema.menuCategories.restaurantId, restaurant.id),
+          sql`lower(${schema.menuCategories.name}) = ${dto.name.toLowerCase()}`,
+        ),
+      );
+
+    if (existing) {
+      throw new ConflictException('A category with this name already exists');
     }
 
-    // ==================== CATEGORIES ====================
-
-    async createCategory(ownerId: string, dto: CreateCategoryDto) {
-        const restaurant = await this.getRestaurantByOwner(ownerId);
-      
-        if (!restaurant) throw new NotFoundException('Create a restaurant first');
-      
-        const [category] = await this.db
-          .insert(schema.menuCategories)
-          .values({ restaurantId: restaurant.id, name: dto.name })
-          .returning();
-      
-        return category;
+    let category: typeof schema.menuCategories.$inferSelect;
+    try {
+      [category] = await this.db
+        .insert(schema.menuCategories)
+        .values({ restaurantId: restaurant.id, name: dto.name })
+        .returning();
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        throw new ConflictException('A category with this name already exists');
       }
-
-    async getCategories(restaurantId: string) {
-        return this.db
-            .select()
-            .from(schema.menuCategories)
-            .where(eq(schema.menuCategories.restaurantId, restaurantId));
+      throw error;
     }
 
-    async updateCategory(id: string, ownerId: string, dto: UpdateCategoryDto) {
-        const restaurant = await this.getRestaurantByOwner(ownerId);
-    
-        const [category] = await this.db
-            .select()
-            .from(schema.menuCategories)
-            .where(eq(schema.menuCategories.id, id));
-    
-        if (!category) throw new NotFoundException('Category not found');
-    
-        if (category.restaurantId !== restaurant.id) {
-            throw new ForbiddenException(
-                'This category does not belong to your restaurant',
-            );
-        }
-    
-        const [updated] = await this.db
-            .update(schema.menuCategories)
-            .set({ name: dto.name })
-            .where(eq(schema.menuCategories.id, id))
-            .returning();
-    
-        return updated;
-    } 
+    return category;
+  }
 
-    async deleteCategory(id: string, ownerId: string) {
-        const restaurant = await this.getRestaurantByOwner(ownerId);
-    
-        const [category] = await this.db
-            .select()
-            .from(schema.menuCategories)
-            .where(eq(schema.menuCategories.id, id));
-    
-        if (!category) throw new NotFoundException('Category not found');
-    
-        if (category.restaurantId !== restaurant.id) {
-            throw new ForbiddenException(
-                'This category does not belong to your restaurant',
-            );
-        }
-    
-        await this.db
-            .delete(schema.menuCategories)
-            .where(eq(schema.menuCategories.id, id));
-    
-        return { message: 'Category deleted successfully' };
+  async getCategories(restaurantId: string) {
+    return this.db
+      .select()
+      .from(schema.menuCategories)
+      .where(eq(schema.menuCategories.restaurantId, restaurantId));
+  }
+
+  async updateCategory(id: string, ownerId: string, dto: UpdateCategoryDto) {
+    const restaurant = await this.getRestaurantByOwner(ownerId);
+
+    if (!dto.name) {
+      throw new BadRequestException('Provide a category name to update');
     }
 
-    // ==================== MENU ITEMS ====================
+    const [category] = await this.db
+      .select()
+      .from(schema.menuCategories)
+      .where(eq(schema.menuCategories.id, id));
 
-    async createItem(ownerId: string, dto: CreateMenuItemDto) {
-        const restaurant = await this.getRestaurantByOwner(ownerId);
-    
-        const [item] = await this.db
-            .insert(schema.menuItems)
-            .values({
-                restaurantId: restaurant.id,
-                categoryId: dto.categoryId,
-                name: dto.name,
-                description: dto.description,
-                price: dto.price,
-                imageUrl: dto.imageUrl,
-            })
-            .returning();
-    
-        return item;
+    if (!category) throw new NotFoundException('Category not found');
+
+    if (category.restaurantId !== restaurant.id) {
+      throw new ForbiddenException(
+        'This category does not belong to your restaurant',
+      );
     }
 
-    async getItemsByRestaurant(restaurantId: string) {
-        // returns all items for a restaurant – frontend groups them by category
-        return this.db
-            .select()
-            .from(schema.menuItems)
-            .where(eq(schema.menuItems.restaurantId, restaurantId));
+    const [duplicate] = await this.db
+      .select({ id: schema.menuCategories.id })
+      .from(schema.menuCategories)
+      .where(
+        and(
+          eq(schema.menuCategories.restaurantId, restaurant.id),
+          sql`lower(${schema.menuCategories.name}) = ${dto.name.toLowerCase()}`,
+          ne(schema.menuCategories.id, id),
+        ),
+      )
+      .limit(1);
+    if (duplicate) {
+      throw new ConflictException('A category with this name already exists');
     }
 
-    async updateItem(id: string, ownerId: string, dto: UpdateMenuItemDto) {
-        const restaurant = await this.getRestaurantByOwner(ownerId);
-    
-        const [item] = await this.db
-            .select()
-            .from(schema.menuItems)
-            .where(eq(schema.menuItems.id, id));
-    
-        if (!item) throw new NotFoundException('Menu item not found');
-    
-        if (item.restaurantId !== restaurant.id) {
-            throw new ForbiddenException('This item does not belong to your restaurant');
-        }
-    
-        const [updated] = await this.db
-            .update(schema.menuItems)
-            .set({ ...dto, updatedAt: new Date() })
-            .where(eq(schema.menuItems.id, id))
-            .returning();
-    
-        return updated;
+    const [updated] = await this.db
+      .update(schema.menuCategories)
+      .set({ name: dto.name })
+      .where(eq(schema.menuCategories.id, id))
+      .returning();
+
+    return updated;
+  }
+
+  async deleteCategory(id: string, ownerId: string) {
+    const restaurant = await this.getRestaurantByOwner(ownerId);
+
+    const [category] = await this.db
+      .select()
+      .from(schema.menuCategories)
+      .where(eq(schema.menuCategories.id, id));
+
+    if (!category) throw new NotFoundException('Category not found');
+
+    if (category.restaurantId !== restaurant.id) {
+      throw new ForbiddenException(
+        'This category does not belong to your restaurant',
+      );
     }
 
-    async deleteItem(id: string, ownerId: string) {
-        const restaurant = await this.getRestaurantByOwner(ownerId);
-    
-        const [item] = await this.db
-            .select()
-            .from(schema.menuItems)
-            .where(eq(schema.menuItems.id, id));
-    
-        if (!item) throw new NotFoundException('Menu item not found');
-    
-        if (item.restaurantId !== restaurant.id) {
-            throw new ForbiddenException('This item does not belong to your restaurant');
-        }
-    
-        await this.db
-            .delete(schema.menuItems)
-            .where(eq(schema.menuItems.id, id));
-    
-        return { message: 'Item deleted' };
-    } 
+    const [item] = await this.db
+      .select({ id: schema.menuItems.id })
+      .from(schema.menuItems)
+      .where(eq(schema.menuItems.categoryId, id))
+      .limit(1);
+
+    if (item) {
+      throw new ConflictException(
+        'This category still has menu items. Move or remove them first.',
+      );
+    }
+
+    await this.db
+      .delete(schema.menuCategories)
+      .where(eq(schema.menuCategories.id, id));
+
+    return { message: 'Category deleted successfully' };
+  }
+
+  // ==================== MENU ITEMS ====================
+
+  async createItem(ownerId: string, dto: CreateMenuItemDto) {
+    const restaurant = await this.getRestaurantByOwner(ownerId);
+
+    await this.getCategoryForRestaurant(dto.categoryId, restaurant.id);
+    this.assertPositivePrice(dto.price);
+
+    const [item] = await this.db
+      .insert(schema.menuItems)
+      .values({
+        restaurantId: restaurant.id,
+        categoryId: dto.categoryId,
+        name: dto.name,
+        description: this.normaliseOptionalText(dto.description),
+        price: dto.price,
+        imageUrl: dto.imageUrl,
+      })
+      .returning();
+
+    return item;
+  }
+
+  async getItemsByRestaurant(restaurantId: string) {
+    // returns all items for a restaurant – frontend groups them by category
+    return this.db
+      .select()
+      .from(schema.menuItems)
+      .where(eq(schema.menuItems.restaurantId, restaurantId));
+  }
+
+  async updateItem(id: string, ownerId: string, dto: UpdateMenuItemDto) {
+    const restaurant = await this.getRestaurantByOwner(ownerId);
+
+    if (Object.keys(dto).length === 0) {
+      throw new BadRequestException(
+        'Provide at least one item field to update',
+      );
+    }
+
+    const [item] = await this.db
+      .select()
+      .from(schema.menuItems)
+      .where(eq(schema.menuItems.id, id));
+
+    if (!item) throw new NotFoundException('Menu item not found');
+
+    if (item.restaurantId !== restaurant.id) {
+      throw new ForbiddenException(
+        'This item does not belong to your restaurant',
+      );
+    }
+
+    if (dto.categoryId) {
+      await this.getCategoryForRestaurant(dto.categoryId, restaurant.id);
+    }
+    if (dto.price !== undefined) this.assertPositivePrice(dto.price);
+
+    const [updated] = await this.db
+      .update(schema.menuItems)
+      .set({
+        ...dto,
+        description:
+          dto.description === undefined
+            ? undefined
+            : this.normaliseOptionalText(dto.description),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.menuItems.id, id))
+      .returning();
+
+    return updated;
+  }
+
+  async deleteItem(id: string, ownerId: string) {
+    const restaurant = await this.getRestaurantByOwner(ownerId);
+
+    const [item] = await this.db
+      .select()
+      .from(schema.menuItems)
+      .where(eq(schema.menuItems.id, id));
+
+    if (!item) throw new NotFoundException('Menu item not found');
+
+    if (item.restaurantId !== restaurant.id) {
+      throw new ForbiddenException(
+        'This item does not belong to your restaurant',
+      );
+    }
+
+    const [orderedItem] = await this.db
+      .select({ id: schema.orderItems.id })
+      .from(schema.orderItems)
+      .where(eq(schema.orderItems.menuItemId, id))
+      .limit(1);
+
+    if (orderedItem) {
+      throw new ConflictException(
+        'This menu item appears in an order. Mark it unavailable instead.',
+      );
+    }
+
+    await this.db.delete(schema.menuItems).where(eq(schema.menuItems.id, id));
+
+    return { message: 'Item deleted' };
+  }
+
+  private async getCategoryForRestaurant(
+    categoryId: string,
+    restaurantId: string,
+  ) {
+    const [category] = await this.db
+      .select({
+        id: schema.menuCategories.id,
+        restaurantId: schema.menuCategories.restaurantId,
+      })
+      .from(schema.menuCategories)
+      .where(eq(schema.menuCategories.id, categoryId));
+
+    if (!category || category.restaurantId !== restaurantId) {
+      throw new NotFoundException('Menu category not found');
+    }
+
+    return category;
+  }
+
+  private assertPositivePrice(price: string) {
+    const value = Number(price);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new BadRequestException('Menu price must be greater than zero');
+    }
+  }
+
+  private normaliseOptionalText(value?: string | null) {
+    return value?.trim() || null;
+  }
 }

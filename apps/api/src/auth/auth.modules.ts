@@ -9,7 +9,7 @@ import { RolesGuard } from './guards/roles.guard';
   imports: [
     JwtModule.registerAsync({
       useFactory: () => ({
-        secret: process.env.JWT_SECRET!, 
+        secret: process.env.JWT_SECRET!,
         signOptions: { expiresIn: '7d' },
       }),
     }),

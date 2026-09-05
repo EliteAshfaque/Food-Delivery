@@ -1,0 +1,85 @@
+import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsDate,
+  IsIn,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Length,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
+
+export class CreateOfferDto {
+  @IsString()
+  @Length(2, 80)
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsUrl({ require_protocol: true })
+  @MaxLength(2_000)
+  imageUrl?: string;
+
+  /** Codes are normalised to upper case by the API. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{3,32}$/)
+  code?: string;
+
+  @IsIn(['PERCENTAGE', 'FIXED_AMOUNT'])
+  discountType!: 'PERCENTAGE' | 'FIXED_AMOUNT';
+
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  discountValue!: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  minimumOrderAmount?: number;
+
+  /** Required only when a percentage campaign needs a currency cap. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  maximumDiscountAmount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000)
+  usageLimit?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  perCustomerLimit?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  autoApply?: boolean;
+
+  @Type(() => Date)
+  @IsDate()
+  startsAt!: Date;
+
+  @Type(() => Date)
+  @IsDate()
+  endsAt!: Date;
+}

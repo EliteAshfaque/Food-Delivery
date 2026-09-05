@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Request,
@@ -38,7 +39,10 @@ export class DriverController {
   }
 
   @Post('orders/:id/decline')
-  declineOrder(@Param('id') id: string, @Request() req: AuthRequest) {
+  declineOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: AuthRequest,
+  ) {
     return this.driverService.declineOrder(id, req.user.sub);
   }
 }

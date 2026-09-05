@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
 
-import { AppIcon } from '@/components/wasil-icon-system';
 import { brand } from '@/constants/brand';
 import type { Coordinates } from '@/hooks/user-order.socket';
 import type { OrderTrackingMapProps } from './order-tracking-map.types';
@@ -49,7 +48,7 @@ export function OrderTrackingMap({
   useEffect(() => {
     const region = regionForPoints(delivery, driver);
     mapRef.current?.animateToRegion(region, 450);
-  }, [delivery, driver?.latitude, driver?.longitude]);
+  }, [delivery, driver]);
 
   return (
     <View style={styles.wrap}>

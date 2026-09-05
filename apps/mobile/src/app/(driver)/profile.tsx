@@ -6,6 +6,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { CustomerReviewsList } from "@/components/customer-reviews-list";
+import { RequestErrorState } from "@/components/request-error-state";
 import { WasilLogo } from "@/components/wasil-brand";
 import { AppIcon, type AppIconName } from "@/components/wasil-icon-system";
 import { brand } from "@/constants/brand";
@@ -57,7 +58,12 @@ export default function ProfileScreen() {
     enabled: Boolean(user?.id),
   });
 
-  const { data: driverReviews = [] } = useQuery<RestaurantReview[]>({
+  const {
+    data: driverReviews = [],
+    error: driverReviewsError,
+    isError: hasDriverReviewsError,
+    refetch: refetchDriverReviews,
+  } = useQuery<RestaurantReview[]>({
     queryKey: ["driver-reviews", user?.id],
     queryFn: () =>
       api.get(`/reviews/driver/${user!.id}/list`).then((res) => res.data),
@@ -117,11 +123,19 @@ export default function ProfileScreen() {
 
         <Animated.View entering={enter(150, 350)}>
           <Text style={styles.sectionLabel}>YOUR REVIEWS</Text>
-          <CustomerReviewsList
-            highlight="driver"
-            reviews={driverReviews}
-            title="Delivery feedback"
-          />
+          {hasDriverReviewsError ? (
+            <RequestErrorState
+              error={driverReviewsError}
+              onRetry={() => void refetchDriverReviews()}
+              title="Couldn’t load delivery feedback"
+            />
+          ) : (
+            <CustomerReviewsList
+              highlight="driver"
+              reviews={driverReviews}
+              title="Delivery feedback"
+            />
+          )}
         </Animated.View>
 
         <Animated.View entering={enter(200, 380)}>

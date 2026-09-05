@@ -21,12 +21,16 @@ import Animated, {
 
 import { WasilLogo } from '@/components/wasil-brand';
 import { AppIcon } from '@/components/wasil-icon-system';
+import { RequestErrorState } from '@/components/request-error-state';
 import { brand } from '@/constants/brand';
 import { BottomTabInset } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
 import { getServerUrl } from '@/lib/api-config';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { api } from '@/lib/axios';
+import { formatCurrency } from '@/lib/format';
 import { OrderStatus, type OrderStatus as OrderStatusType } from '@food-delivery/types';
+import { getToken } from '../../../lib/auth';
 
 type DriverOrder = {
   id: string;
@@ -52,12 +56,6 @@ type LiveCoords = {
   longitude: number;
 };
 
-function formatPrice(price: string) {
-  const value = Number.parseFloat(price);
-  if (Number.isNaN(value)) return price;
-  return `$${value.toFixed(2)}`;
-}
-
 function formatStatus(status: OrderStatusType) {
   return status.replaceAll('_', ' ');
 }
@@ -78,7 +76,12 @@ function openMaps({
     Platform.OS === 'ios'
       ? `http://maps.apple.com/?daddr=${encoded}`
       : `https://www.google.com/maps/dir/?api=1&destination=${encoded}`;
-  void Linking.openURL(url);
+  void Linking.openURL(url).catch(() =>
+    Alert.alert(
+      'Navigation unavailable',
+      'We could not open your maps app. Please try again.',
+    ),
+  );
 }
 
 export default function DriverActiveScreen() {
@@ -90,12 +93,21 @@ export default function DriverActiveScreen() {
 
   const socketRef = useRef<Socket | null>(null);
   const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
-  const [isSharing, setIsSharing] = useState(false);
-  const [sharingEnabled, setSharingEnabled] = useState(false);
+  const [isTrackingReady, setTrackingReady] = useState(false);
+  const [sharingOrderId, setSharingOrderId] = useState<string | null>(null);
   const [liveCoords, setLiveCoords] = useState<LiveCoords | null>(null);
+
+  function stopNativeTracking() {
+    locationWatchRef.current?.remove();
+    socketRef.current?.disconnect();
+    locationWatchRef.current = null;
+    socketRef.current = null;
+  }
 
   const {
     data: activeOrders = [],
+    error: activeOrdersError,
+    isError: activeOrdersIsError,
     isLoading,
     isFetching,
     refetch,
@@ -120,14 +132,16 @@ export default function DriverActiveScreen() {
       api.patch(`/orders/${orderId}/status`, { status }).then((res) => res.data),
     onSuccess: (_data, vars) => {
       if (vars.status === OrderStatus.DELIVERED) {
-        setSharingEnabled(false);
-        stopTracking();
+        setSharingOrderId(null);
+        setTrackingReady(false);
+        setLiveCoords(null);
+        stopNativeTracking();
       }
       queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
       queryClient.invalidateQueries({ queryKey: ['driver-orders'] });
     },
     onError: (error) => {
-      Alert.alert('Error', error.message);
+      Alert.alert('Could not update delivery', getApiErrorMessage(error));
     },
   });
 
@@ -135,11 +149,14 @@ export default function DriverActiveScreen() {
     mutationFn: (orderId: string) =>
       api.post(`/driver/orders/${orderId}/decline`).then((res) => res.data),
     onSuccess: () => {
-      stopTracking();
+      setSharingOrderId(null);
+      setTrackingReady(false);
+      setLiveCoords(null);
+      stopNativeTracking();
       queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
     },
     onError: (error) => {
-      Alert.alert('Error', error.message);
+      Alert.alert('Could not decline delivery', getApiErrorMessage(error));
     },
   });
 
@@ -149,78 +166,139 @@ export default function DriverActiveScreen() {
   const isOnActiveRoute =
     order?.status === OrderStatus.READY ||
     order?.status === OrderStatus.PICKED_UP;
-
-  async function startTracking(orderId: string, restaurantId: string) {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(
-        'Permission needed',
-        'Location access is required so the customer can track your delivery.',
-      );
-      setIsSharing(false);
-      return;
-    }
-
-    stopTracking();
-
-    const socket = io(`${getServerUrl()}/orders`, {
-      transports: ['websocket'],
-    });
-    socketRef.current = socket;
-
-    locationWatchRef.current = await Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.High,
-        timeInterval: 3000,
-        distanceInterval: 10,
-      },
-      (location) => {
-        const coords = {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-        };
-        setLiveCoords(coords);
-        socketRef.current?.emit('driver:location', {
-          driverId: user?.id,
-          orderId,
-          restaurantId,
-          ...coords,
-        });
-      },
-    );
-
-    setIsSharing(true);
-  }
-
-  function stopTracking() {
-    locationWatchRef.current?.remove();
-    socketRef.current?.disconnect();
-    locationWatchRef.current = null;
-    socketRef.current = null;
-    setIsSharing(false);
-    setLiveCoords(null);
-  }
+  // Location-sharing permission is intentionally bound to one delivery. A
+  // completed or replaced order cannot silently carry this choice forward.
+  const sharingEnabled = Boolean(
+    isOnActiveRoute && order?.id && sharingOrderId === order.id,
+  );
+  const isSharing = sharingEnabled && isTrackingReady;
 
   useEffect(() => {
-    if (isOnActiveRoute && sharingEnabled && order) {
-      void startTracking(order.id, order.restaurantId);
-    } else {
-      stopTracking();
+    let cancelled = false;
+
+    if (!sharingEnabled || !order || !user?.id) {
+      stopNativeTracking();
+      return () => {
+        cancelled = true;
+        stopNativeTracking();
+      };
     }
+    const driverId = user.id;
+
+    async function beginTracking() {
+      try {
+        const token = await getToken();
+        if (!token) {
+          if (!cancelled) {
+            setSharingOrderId(null);
+            setTrackingReady(false);
+            Alert.alert('Sign in required', 'Sign in again before sharing your location.');
+          }
+          return;
+        }
+
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (cancelled) return;
+        if (status !== 'granted') {
+          setSharingOrderId(null);
+          setTrackingReady(false);
+          Alert.alert(
+            'Permission needed',
+            'Allow location access to share your position during this delivery.',
+          );
+          return;
+        }
+
+        stopNativeTracking();
+
+        const socket = io(`${getServerUrl()}/orders`, {
+          auth: { token },
+          transports: ['websocket'],
+        });
+        socketRef.current = socket;
+
+        socket.on('connect_error', () => {
+          if (cancelled) return;
+          setSharingOrderId(null);
+          setTrackingReady(false);
+          setLiveCoords(null);
+          stopNativeTracking();
+          Alert.alert(
+            'Live location unavailable',
+            'We could not start secure location sharing. Check your connection and try again.',
+          );
+        });
+        socket.on(
+          'driver:location:error',
+          (event: { code?: string }) => {
+            if (cancelled) return;
+            setSharingOrderId(null);
+            setTrackingReady(false);
+            setLiveCoords(null);
+            stopNativeTracking();
+            const message =
+              event.code === 'LOCATION_NOT_ALLOWED'
+                ? 'This delivery is no longer active, so location sharing has stopped.'
+                : 'We could not share your location. Please try again.';
+            Alert.alert('Live location paused', message);
+          },
+        );
+
+        const watch = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 3000,
+            distanceInterval: 10,
+          },
+          (location) => {
+            const coords = {
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+            };
+            setLiveCoords(coords);
+            socketRef.current?.emit('driver:location', {
+              driverId,
+              orderId: order.id,
+              restaurantId: order.restaurantId,
+              ...coords,
+            });
+          },
+        );
+
+        if (cancelled) {
+          watch.remove();
+          return;
+        }
+
+        locationWatchRef.current = watch;
+        setTrackingReady(true);
+      } catch (error) {
+        if (cancelled) return;
+        stopNativeTracking();
+        setSharingOrderId(null);
+        setTrackingReady(false);
+        setLiveCoords(null);
+        Alert.alert(
+          'Live location unavailable',
+          getApiErrorMessage(
+            error,
+            'We could not start location sharing. Check your location settings and try again.',
+          ),
+        );
+      }
+    }
+
+    void beginTracking();
 
     return () => {
-      stopTracking();
+      cancelled = true;
+      stopNativeTracking();
     };
-    // Restart only when the active delivery identity/status changes
+    // Tracking must restart only when the delivery or deliberate sharing
+    // choice changes. The socket and location subscription are external
+    // systems owned by this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnActiveRoute, order?.id, sharingEnabled, user?.id]);
-
-  // Each delivery requires a fresh, deliberate sharing choice.
-  useEffect(() => {
-    if (!isOnActiveRoute) {
-      setSharingEnabled(false);
-    }
-  }, [isOnActiveRoute, order?.id]);
+  }, [order?.id, order?.restaurantId, sharingEnabled, user?.id]);
 
   function nextAction(
     status: OrderStatusType,
@@ -235,6 +313,28 @@ export default function DriverActiveScreen() {
   }
 
   const action = order ? nextAction(order.status) : null;
+
+  function handleStatusAction(
+    orderId: string,
+    nextStatus: OrderStatusType,
+  ) {
+    if (nextStatus !== OrderStatus.DELIVERED) {
+      updateStatus({ orderId, status: nextStatus });
+      return;
+    }
+
+    Alert.alert(
+      'Mark as delivered?',
+      'Only confirm after the customer has received the order.',
+      [
+        { text: 'Not yet', style: 'cancel' },
+        {
+          text: 'Mark delivered',
+          onPress: () => updateStatus({ orderId, status: nextStatus }),
+        },
+      ],
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -280,6 +380,12 @@ export default function DriverActiveScreen() {
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={brand.colors.light.primary} />
           </View>
+        ) : activeOrdersIsError ? (
+          <RequestErrorState
+            error={activeOrdersError}
+            onRetry={() => void refetch()}
+            title="Couldn’t load your active delivery"
+          />
         ) : !order ? (
           <Animated.View entering={enter(140, 340)}>
             <View style={styles.routeCanvas}>
@@ -410,7 +516,7 @@ export default function DriverActiveScreen() {
                 </View>
               </View>
 
-              <Text style={styles.total}>{formatPrice(order.totalAmount)}</Text>
+              <Text style={styles.total}>{formatCurrency(order.totalAmount)}</Text>
 
               <View style={styles.navRow}>
                 <Pressable
@@ -460,9 +566,7 @@ export default function DriverActiveScreen() {
                     busy && styles.disabled,
                   ]}
                   disabled={busy}
-                  onPress={() =>
-                    updateStatus({ orderId: order.id, status: action.status })
-                  }>
+                  onPress={() => handleStatusAction(order.id, action.status)}>
                   {updating && updatingVars?.orderId === order.id ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
@@ -503,13 +607,20 @@ export default function DriverActiveScreen() {
                     styles.stopTrackButton,
                     !sharingEnabled && styles.startTrackButton,
                   ]}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: busy, selected: sharingEnabled }}
+                  disabled={busy}
                   onPress={() => {
                     if (sharingEnabled) {
-                      setSharingEnabled(false);
-                      stopTracking();
+                      setSharingOrderId(null);
+                      setTrackingReady(false);
+                      setLiveCoords(null);
+                      stopNativeTracking();
                       return;
                     }
-                    setSharingEnabled(true);
+                    setTrackingReady(false);
+                    setLiveCoords(null);
+                    setSharingOrderId(order.id);
                   }}>
                   <Text style={[
                     styles.stopTrackText,

@@ -7,6 +7,8 @@ import {
   StyleSheet,
   TextInput,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { useState } from "react";
 import { useAuth } from "@/context/auth-context";
@@ -14,6 +16,8 @@ import { router } from "expo-router";
 import { UserRole } from "@food-delivery/types";
 import { brand } from "@/constants/brand";
 import { WasilLogo } from "@/components/wasil-brand";
+import { getApiErrorMessage, getApiErrorStatus } from "@/lib/api-error";
+import { validateRegistrationDetails } from "@/lib/form-validation";
 
 const ROLES = [
   { label: "Customer", value: UserRole.CUSTOMER },
@@ -31,57 +35,110 @@ const RegisterScreen = () => {
   const [isLoading, setLoading] = useState(false);
 
   async function handleRegister() {
-    if (!firstName || !lastName || !email || !password) {
-      return Alert.alert("Please fill all the required fields");
+    const validationError = validateRegistrationDetails({
+      firstName,
+      lastName,
+      email,
+      password,
+    });
+    if (validationError) {
+      Alert.alert("Check account details", validationError);
+      return;
     }
+
     setLoading(true);
     try {
-      await register({ firstName, lastName, email, password, role });
-      //   router.push("/dashboard");
+      const result = await register({ firstName, lastName, email, password, role });
+      if (result.requiresApproval) {
+        Alert.alert(
+          "Application received",
+          result.message ??
+            "Your account needs administrator approval before you can sign in.",
+          [{ text: "OK", onPress: () => router.replace("/login") }],
+        );
+        return;
+      }
+
+      router.replace("/");
     } catch (error) {
-      Alert.alert("Error while Registering the User");
+      const status = getApiErrorStatus(error);
+      if (status === 409) {
+        Alert.alert(
+          "Email already registered",
+          "Sign in instead, or use another email address.",
+        );
+      } else {
+        Alert.alert("Could not create account", getApiErrorMessage(error));
+      }
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.scrollContainer}>
-      <View style={styles.container}>
-        <WasilLogo showTagline size={44} style={styles.logo} />
-        <Text style={styles.title}>Create your account</Text>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.container}>
+          <WasilLogo showTagline size={44} style={styles.logo} />
+          <Text style={styles.title}>Create your account</Text>
 
         <TextInput
+          accessibilityLabel="First name"
           style={styles.input}
           placeholder="First Name"
+          placeholderTextColor={brand.colors.light.inkMuted}
           value={firstName}
           onChangeText={setFirstName}
           autoCapitalize="words"
+          autoCorrect={false}
+          maxLength={80}
+          returnKeyType="next"
         />
 
         <TextInput
+          accessibilityLabel="Last name"
           style={styles.input}
           placeholder="Last Name"
+          placeholderTextColor={brand.colors.light.inkMuted}
           value={lastName}
           onChangeText={setLastName}
           autoCapitalize="words"
+          autoCorrect={false}
+          maxLength={80}
+          returnKeyType="next"
         />
 
         <TextInput
+          accessibilityLabel="Email address"
           style={styles.input}
           placeholder="Email"
+          placeholderTextColor={brand.colors.light.inkMuted}
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
           keyboardType="email-address"
+          autoCorrect={false}
+          maxLength={254}
+          returnKeyType="next"
         />
 
         <TextInput
+          accessibilityLabel="Password"
           style={styles.input}
           placeholder="Password"
-          value={password} // Fixed: was email
+          value={password}
           onChangeText={setPassword}
           secureTextEntry
+          placeholderTextColor={brand.colors.light.inkMuted}
+          maxLength={128}
+          returnKeyType="done"
+          onSubmitEditing={() => void handleRegister()}
         />
 
         <Text style={styles.label}>Select Your Role</Text>
@@ -90,16 +147,18 @@ const RegisterScreen = () => {
           {ROLES.map((r) => (
             <Pressable
               key={r.value}
+              accessibilityRole="button"
+              accessibilityState={{ selected: role === r.value }}
               style={[
                 styles.roleButton,
-                role === r.value && styles.roleButtonActive, // Fixed: was rPressed
+                role === r.value && styles.roleButtonActive,
               ]}
               onPress={() => setRole(r.value)}
             >
               <Text
                 style={[
                   styles.roleText,
-                  role === r.value && styles.roleTextActive, // Fixed: was rLabel
+                  role === r.value && styles.roleTextActive,
                 ]}
               >
                 {r.label}
@@ -107,13 +166,19 @@ const RegisterScreen = () => {
             </Pressable>
           ))}
         </View>
+        {role !== UserRole.CUSTOMER ? (
+          <Text style={styles.approvalHint}>
+            Driver and restaurant-owner accounts require administrator approval
+            before they can sign in.
+          </Text>
+        ) : null}
 
         <Pressable
           style={[styles.button, isLoading && styles.buttonDisabled]}
-          onPress={handleRegister} // Fixed: was incorrect syntax
+          onPress={() => void handleRegister()}
           disabled={isLoading}
         >
-          {isLoading ? ( // Fixed: conditional rendering
+          {isLoading ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
             <Text style={styles.buttonText}>Register</Text>
@@ -121,12 +186,11 @@ const RegisterScreen = () => {
         </Pressable>
 
         <Pressable onPress={() => router.back()}>
-          {" "}
-          {/* Fixed: was incorrect syntax */}
           <Text style={styles.link}>Already have an account? Login</Text>
         </Pressable>
-      </View>
-    </ScrollView>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -134,8 +198,12 @@ const styles = StyleSheet.create({
   scrollContainer: {
     flexGrow: 1,
   },
+  flex: {
+    flex: 1,
+    backgroundColor: brand.colors.light.canvas,
+  },
   container: {
-    flex: 1, // Fixed: was flexRow
+    flex: 1,
     justifyContent: "center",
     padding: 24,
     backgroundColor: brand.colors.light.canvas,
@@ -168,6 +236,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     marginBottom: 24,
+  },
+  approvalHint: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: -14,
+    marginBottom: 20,
   },
   roleButton: {
     flex: 1,

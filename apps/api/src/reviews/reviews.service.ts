@@ -7,17 +7,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { avg, count, desc, eq } from 'drizzle-orm';
-import type { NeonHttpDatabase } from 'drizzle-orm/neon-http';
+import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
 import { OrderStatus } from '@food-delivery/types';
 import type { schema as RelationsSchema } from '../db/relations';
 import * as schema from '../db/schema';
+import { isPostgresUniqueViolation } from '../db/is-unique-violation';
 import { CreateReviewDto } from './dto/create-review.dto';
 
 @Injectable()
 export class ReviewsService {
-  constructor(
-    @Inject('DB') private db: NeonHttpDatabase<typeof RelationsSchema>,
-  ) {}
+  constructor(@Inject('DB') private db: NeonDatabase<typeof RelationsSchema>) {}
 
   async create(customerId: string, dto: CreateReviewDto) {
     const [order] = await this.db
@@ -36,7 +35,8 @@ export class ReviewsService {
     const [existing] = await this.db
       .select({ id: schema.reviews.id })
       .from(schema.reviews)
-      .where(eq(schema.reviews.orderId, dto.orderId));
+      .where(eq(schema.reviews.orderId, dto.orderId))
+      .limit(1);
 
     if (existing) {
       throw new ConflictException('This order has already been reviewed');
@@ -46,21 +46,34 @@ export class ReviewsService {
       throw new BadRequestException('This order had no driver to rate');
     }
     if (order.driverId && dto.driverRating == null) {
-      throw new BadRequestException('Please rate your driver for this delivery');
+      throw new BadRequestException(
+        'Please rate your driver for this delivery',
+      );
     }
 
-    const [review] = await this.db
-      .insert(schema.reviews)
-      .values({
-        customerId,
-        restaurantId: order.restaurantId,
-        orderId: order.id,
-        driverId: order.driverId,
-        restaurantRating: dto.restaurantRating,
-        driverRating: dto.driverRating ?? null,
-        comment: dto.comment?.trim() || null,
-      })
-      .returning();
+    let review: typeof schema.reviews.$inferSelect;
+    try {
+      const [created] = await this.db
+        .insert(schema.reviews)
+        .values({
+          customerId,
+          restaurantId: order.restaurantId,
+          orderId: order.id,
+          driverId: order.driverId,
+          restaurantRating: dto.restaurantRating,
+          driverRating: dto.driverRating ?? null,
+          comment: dto.comment?.trim() || null,
+        })
+        .returning();
+      review = created;
+    } catch (error) {
+      // The pre-check above produces a clear response in the common case; the
+      // database constraint catches two concurrent review submissions.
+      if (isPostgresUniqueViolation(error)) {
+        throw new ConflictException('This order has already been reviewed');
+      }
+      throw error;
+    }
 
     await this.refreshRestaurantRating(order.restaurantId);
 

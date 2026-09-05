@@ -33,13 +33,13 @@ export function AnimatedSplashOverlay() {
 
   useEffect(() => {
     if (reduceMotion) {
-      logoScale.value = 1;
-      wordmarkOpacity.value = 1;
+      logoScale.set(1);
+      wordmarkOpacity.set(1);
       return;
     }
 
-    logoScale.value = withSpring(1, { damping: 13, stiffness: 170 });
-    wordmarkOpacity.value = withDelay(150, withTiming(1, { duration: 340 }));
+    logoScale.set(withSpring(1, { damping: 13, stiffness: 170 }));
+    wordmarkOpacity.set(withDelay(150, withTiming(1, { duration: 340 })));
   }, [logoScale, reduceMotion, wordmarkOpacity]);
 
   useEffect(() => {
@@ -48,12 +48,14 @@ export function AnimatedSplashOverlay() {
     const beginExit = setTimeout(
       () => {
         void SplashScreen.hideAsync();
-        overlayOpacity.value = reduceMotion
-          ? 0
-          : withTiming(0, {
-              duration: 360,
-              easing: Easing.out(Easing.cubic),
-            });
+        overlayOpacity.set(
+          reduceMotion
+            ? 0
+            : withTiming(0, {
+                duration: 360,
+                easing: Easing.out(Easing.cubic),
+              }),
+        );
       },
       reduceMotion ? 0 : 620,
     );
@@ -109,9 +111,9 @@ export function AnimatedIcon() {
   }));
 
   useEffect(() => {
-    scale.value = reduceMotion
-      ? 1
-      : withSpring(1, { damping: 11, stiffness: 165 });
+    scale.set(
+      reduceMotion ? 1 : withSpring(1, { damping: 11, stiffness: 165 }),
+    );
   }, [reduceMotion, scale]);
 
   return (

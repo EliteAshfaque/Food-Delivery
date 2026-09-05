@@ -1,14 +1,38 @@
-import { IsBoolean, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
+
+function trimValue({ value }: { value: unknown }): unknown {
+  return typeof value === 'string' ? value.trim() : value;
+}
 
 export class CreateRestaurantDto {
+  @Transform(trimValue)
   @IsString()
+  @IsNotEmpty()
+  @MinLength(2)
+  @MaxLength(100)
   name!: string;
 
   @IsString()
   @IsOptional()
+  @MaxLength(500)
   description?: string;
 
+  @Transform(trimValue)
   @IsString()
+  @IsNotEmpty()
+  @MinLength(5)
+  @MaxLength(300)
   address!: string;
 
   @IsNumber()
@@ -23,10 +47,15 @@ export class CreateRestaurantDto {
   @IsOptional()
   longitude?: number;
 
+  @Transform(trimValue)
   @IsString()
+  @IsNotEmpty()
+  @MinLength(2)
+  @MaxLength(100)
   cuisineType!: string;
 
-  @IsString()
   @IsOptional()
-  imageUrl?: string;
+  @IsUrl({ require_protocol: true })
+  @MaxLength(2_000)
+  imageUrl?: string | null;
 }

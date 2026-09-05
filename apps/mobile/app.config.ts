@@ -35,6 +35,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     process.env.GOOGLE_MAPS_IOS_API_KEY ??
     process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ??
     '';
+  const googleWebClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ??
+    '181181927620-ii56m5gh1kqmq9hovj6vfquv4bm2poti.apps.googleusercontent.com';
 
   return {
     ...config,
@@ -53,6 +56,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: 'com.wasil.fooddelivery',
+      // Uses the local Firebase file during development. For EAS builds, set
+      // GOOGLE_SERVICES_JSON to the uploaded secret-file path instead.
+      googleServicesFile:
+        process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
       usesCleartextTraffic: true,
       adaptiveIcon: {
         backgroundColor: '#25192A',
@@ -64,7 +71,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           apiKey: googleMapsAndroidApiKey,
         },
       },
-    },
+    } as ExpoConfig['android'] & { usesCleartextTraffic: boolean },
     web: {
       output: 'static',
       favicon: './assets/images/wasil-icon.png',
@@ -102,7 +109,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           iosGoogleMapsApiKey: googleMapsIosApiKey,
         },
       ],
+      '@react-native-google-signin/google-signin',
     ],
+    extra: {
+      ...config.extra,
+      googleWebClientId,
+    },
     experiments: {
       typedRoutes: true,
       reactCompiler: true,

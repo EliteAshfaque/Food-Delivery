@@ -3,10 +3,16 @@ import { io, type Socket } from 'socket.io-client';
 
 import { getServerUrl } from '@/lib/api-config';
 import { api } from '@/lib/axios';
+import { getToken } from '../../lib/auth';
 
 export type Coordinates = {
   latitude: number;
   longitude: number;
+};
+
+type ScopedLocation = {
+  coordinates: Coordinates;
+  scopeId: string;
 };
 
 let socket: Socket | null = null;
@@ -16,6 +22,11 @@ function getSocket(): Socket {
     socket = io(`${getServerUrl()}/orders`, {
       transports: ['websocket'],
       autoConnect: false,
+      auth: (callback) => {
+        void getToken()
+          .then((token) => callback({ token }))
+          .catch(() => callback({}));
+      },
     });
   }
   return socket;
@@ -52,11 +63,12 @@ export function useDriverLocation(
   orderId: string | null,
   enabled: boolean,
 ) {
-  const [driverLocation, setDriverLocation] = useState<Coordinates | null>(null);
+  const [latestLocation, setLatestLocation] = useState<ScopedLocation | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!orderId || !enabled) {
-      setDriverLocation(null);
       return;
     }
 
@@ -66,7 +78,7 @@ export function useDriverLocation(
       .get<Coordinates | null>(`/location/${orderId}`)
       .then((res) => {
         if (!cancelled && res.data) {
-          setDriverLocation(res.data);
+          setLatestLocation({ coordinates: res.data, scopeId: orderId });
         }
       })
       .catch(() => {
@@ -83,9 +95,12 @@ export function useDriverLocation(
       longitude: number;
     }) => {
       if (data.orderId === orderId) {
-        setDriverLocation({
-          latitude: data.latitude,
-          longitude: data.longitude,
+        setLatestLocation({
+          coordinates: {
+            latitude: data.latitude,
+            longitude: data.longitude,
+          },
+          scopeId: orderId,
         });
       }
     };
@@ -98,13 +113,18 @@ export function useDriverLocation(
     };
   }, [orderId, enabled]);
 
-  return driverLocation;
+  // Do not synchronously clear state when the order changes or tracking is
+  // disabled. Scope each update instead, so stale GPS is never exposed while
+  // an in-flight request from a previous order safely settles in the background.
+  return enabled && orderId && latestLocation?.scopeId === orderId
+    ? latestLocation.coordinates
+    : null;
 }
 
-export function useRestaurantSocket(restaurantId: string | null) {
-  const [orderUpdate, setOrderUpdate] = useState<Record<string, unknown> | null>(
-    null,
-  );
+export function useRestaurantSocket<T extends { id: string }>(
+  restaurantId: string | null,
+) {
+  const [orderUpdate, setOrderUpdate] = useState<T | null>(null);
 
   useEffect(() => {
     if (!restaurantId) return;
@@ -113,7 +133,7 @@ export function useRestaurantSocket(restaurantId: string | null) {
     s.connect();
     s.emit('join:restaurant', restaurantId);
 
-    const handler = (data: Record<string, unknown>) => {
+    const handler = (data: T) => {
       setOrderUpdate(data);
     };
 
@@ -129,11 +149,12 @@ export function useRestaurantSocket(restaurantId: string | null) {
 
 /** Live driver GPS for an owner while the driver is heading to pickup. */
 export function useRestaurantDriverLocation(restaurantId: string | null) {
-  const [driverLocation, setDriverLocation] = useState<Coordinates | null>(null);
+  const [latestLocation, setLatestLocation] = useState<ScopedLocation | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!restaurantId) {
-      setDriverLocation(null);
       return;
     }
 
@@ -147,9 +168,12 @@ export function useRestaurantDriverLocation(restaurantId: string | null) {
       longitude: number;
     }) => {
       if (data.restaurantId === restaurantId) {
-        setDriverLocation({
-          latitude: data.latitude,
-          longitude: data.longitude,
+        setLatestLocation({
+          coordinates: {
+            latitude: data.latitude,
+            longitude: data.longitude,
+          },
+          scopeId: restaurantId,
         });
       }
     };
@@ -160,7 +184,9 @@ export function useRestaurantDriverLocation(restaurantId: string | null) {
     };
   }, [restaurantId]);
 
-  return driverLocation;
+  return restaurantId && latestLocation?.scopeId === restaurantId
+    ? latestLocation.coordinates
+    : null;
 }
 
 /** Join driver room and listen for incoming delivery assignments. */

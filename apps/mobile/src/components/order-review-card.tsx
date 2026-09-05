@@ -12,7 +12,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { AppIcon } from '@/components/wasil-icon-system';
 import { brand } from '@/constants/brand';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { api } from '@/lib/axios';
+import { validateReview } from '@/lib/form-validation';
 import type { Review } from '@food-delivery/types';
 
 type OrderReviewCardProps = {
@@ -27,11 +29,13 @@ function StarRow({
   label,
   icon,
   value,
+  disabled = false,
   onChange,
 }: {
   label: string;
   icon: 'restaurant' | 'deliveryRider';
   value: number;
+  disabled?: boolean;
   onChange: (rating: number) => void;
 }) {
   return (
@@ -44,7 +48,14 @@ function StarRow({
       </View>
       <View style={styles.stars}>
         {[1, 2, 3, 4, 5].map((star) => (
-          <Pressable key={star} onPress={() => onChange(star)} hitSlop={6}>
+          <Pressable
+            accessibilityLabel={`${star} star${star === 1 ? '' : 's'}`}
+            accessibilityRole="button"
+            accessibilityState={{ disabled, selected: star <= value }}
+            disabled={disabled}
+            key={star}
+            onPress={() => onChange(star)}
+            hitSlop={6}>
             <AppIcon
               color={
                 star <= value
@@ -83,7 +94,8 @@ export function OrderReviewCard({
           comment: comment.trim() || undefined,
         })
         .then((res) => res.data as Review),
-    onSuccess: () => {
+    onSuccess: (review) => {
+      queryClient.setQueryData(['order-review', orderId], review);
       queryClient.invalidateQueries({ queryKey: ['order-review', orderId] });
       queryClient.invalidateQueries({
         queryKey: ['restaurant-reviews', restaurantId],
@@ -92,18 +104,20 @@ export function OrderReviewCard({
       queryClient.invalidateQueries({ queryKey: ['restaurants'] });
       Alert.alert('Thank you!', 'Your review helps restaurants and drivers improve.');
     },
-    onError: (error: Error) => {
-      Alert.alert('Review failed', error.message);
+    onError: (error) => {
+      Alert.alert('Review failed', getApiErrorMessage(error));
     },
   });
 
   function handleSubmit() {
-    if (restaurantRating < 1) {
-      Alert.alert('Restaurant rating required', 'Please rate the restaurant.');
-      return;
-    }
-    if (hasDriver && driverRating < 1) {
-      Alert.alert('Driver rating required', 'Please rate your delivery driver.');
+    const validationError = validateReview({
+      restaurantRating,
+      driverRating,
+      hasDriver,
+      comment,
+    });
+    if (validationError) {
+      Alert.alert('Check your review', validationError);
       return;
     }
     submitReview();
@@ -133,7 +147,9 @@ export function OrderReviewCard({
           ) : null}
         </View>
         {existingReview.comment ? (
-          <Text style={styles.existingComment}>"{existingReview.comment}"</Text>
+          <Text style={styles.existingComment}>
+            &quot;{existingReview.comment}&quot;
+          </Text>
         ) : null}
       </View>
     );
@@ -154,6 +170,7 @@ export function OrderReviewCard({
         icon="restaurant"
         label={restaurantName ?? 'Restaurant'}
         onChange={setRestaurantRating}
+        disabled={isPending}
         value={restaurantRating}
       />
 
@@ -162,12 +179,14 @@ export function OrderReviewCard({
           icon="deliveryRider"
           label="Delivery driver"
           onChange={setDriverRating}
+          disabled={isPending}
           value={driverRating}
         />
       ) : null}
 
       <TextInput
         multiline
+        maxLength={500}
         onChangeText={setComment}
         placeholder="Add a comment about food or delivery (optional)"
         placeholderTextColor={brand.colors.light.inkMuted}

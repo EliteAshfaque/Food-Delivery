@@ -31,6 +31,11 @@ export default function OwnerLayout() {
         <NativeTabs.Trigger.Icon sf="chart.bar.xaxis" md="bar_chart" />
       </NativeTabs.Trigger>
 
+      <NativeTabs.Trigger name="offers">
+        <NativeTabs.Trigger.Label>Offers</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="tag.fill" md="local_offer" />
+      </NativeTabs.Trigger>
+
       <NativeTabs.Trigger name="profile">
         <NativeTabs.Trigger.Label>Profile</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon

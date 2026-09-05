@@ -17,9 +17,11 @@ import Animated, {
 
 import { WasilLogo } from '@/components/wasil-brand';
 import { AppIcon } from '@/components/wasil-icon-system';
+import { RequestErrorState } from '@/components/request-error-state';
 import { brand } from '@/constants/brand';
 import { BottomTabInset } from '@/constants/theme';
 import { api } from '@/lib/axios';
+import { formatCurrency } from '@/lib/format';
 import {
   OrderStatus,
   type OrderStatus as OrderStatusType,
@@ -88,10 +90,6 @@ const STATUS_META: {
 function parseAmount(value: string) {
   const n = Number.parseFloat(value);
   return Number.isNaN(n) ? 0 : n;
-}
-
-function formatMoney(value: number) {
-  return `$${value.toFixed(2)}`;
 }
 
 function isSameDay(iso: string, now = new Date()) {
@@ -163,15 +161,21 @@ export default function OwnerAnalyticsScreen() {
   const enter = (delay: number, duration = 340) =>
     reduceMotion ? undefined : FadeInDown.duration(duration).delay(delay);
 
-  const { data: restaurant, isLoading: restaurantLoading } = useQuery<
-    Restaurant | null
-  >({
+  const {
+    data: restaurant,
+    error: restaurantError,
+    isError: restaurantIsError,
+    isLoading: restaurantLoading,
+    refetch: refetchRestaurant,
+  } = useQuery<Restaurant | null>({
     queryKey: ['my-restaurants'],
     queryFn: () => api.get('/restaurants/mine').then((res) => res.data),
   });
 
   const {
     data: orders = [],
+    error: ordersError,
+    isError: ordersIsError,
     isLoading: ordersLoading,
     isFetching,
     refetch,
@@ -187,6 +191,7 @@ export default function OwnerAnalyticsScreen() {
 
   const stats = useMemo(() => buildAnalytics(orders), [orders]);
   const loading = restaurantLoading || (ordersLoading && !!restaurant?.id);
+  const requestError = restaurantError ?? ordersError;
 
   return (
     <View style={styles.container}>
@@ -222,6 +227,15 @@ export default function OwnerAnalyticsScreen() {
           <View style={styles.loading}>
             <ActivityIndicator size="large" color={brand.colors.light.primary} />
           </View>
+        ) : restaurantIsError || ordersIsError ? (
+          <RequestErrorState
+            error={requestError}
+            onRetry={() => {
+              void refetchRestaurant();
+              void refetch();
+            }}
+            title="Couldn’t load analytics"
+          />
         ) : !restaurant ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>No restaurant yet</Text>
@@ -242,7 +256,7 @@ export default function OwnerAnalyticsScreen() {
               <View style={styles.heroCard}>
                 <View style={styles.heroGlow} />
                 <Text style={styles.heroEyebrow}>TOTAL REVENUE</Text>
-                <Text style={styles.heroValue}>{formatMoney(stats.revenue)}</Text>
+                <Text style={styles.heroValue}>{formatCurrency(stats.revenue)}</Text>
                 <Text style={styles.heroHint}>
                   From confirmed & completed orders
                 </Text>
@@ -255,7 +269,7 @@ export default function OwnerAnalyticsScreen() {
                   <View style={styles.heroDivider} />
                   <View style={styles.heroStat}>
                     <Text style={styles.heroStatValue}>
-                      {formatMoney(stats.avgOrder)}
+                      {formatCurrency(stats.avgOrder)}
                     </Text>
                     <Text style={styles.heroStatLabel}>Avg order</Text>
                   </View>
@@ -292,7 +306,7 @@ export default function OwnerAnalyticsScreen() {
                     />
                   </View>
                   <Text style={styles.todayValue}>
-                    {formatMoney(stats.todayRevenue)}
+                    {formatCurrency(stats.todayRevenue)}
                   </Text>
                   <Text style={styles.todayLabel}>Today’s sales</Text>
                 </View>

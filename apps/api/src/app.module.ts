@@ -12,6 +12,10 @@ import { GatewayModule } from './gateway/gateway.module';
 import { DriverModule } from './driver/driver.module';
 import { LocationModule } from './location/location.module';
 import { ReviewsModule } from './reviews/reviews.module';
+import { AdminModule } from './admin/admin.module';
+import { OffersModule } from './offers/offers.module';
+import { UploadthingModule } from './uploadthing/uploadthing.module';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 @Module({
   imports: [
@@ -19,9 +23,17 @@ import { ReviewsModule } from './reviews/reviews.module';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    // Applied to the authentication controller with a tighter route-level
+    // override, without throttling order tracking or Stripe webhooks.
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000,
+        limit: 60,
+      },
+    ]),
     DbModule,
     AuthModule,
-    RestaurantsModule, 
+    RestaurantsModule,
     MenuModule,
     DriverModule,
     LocationModule,
@@ -29,6 +41,9 @@ import { ReviewsModule } from './reviews/reviews.module';
     PaymentsModule,
     GatewayModule,
     ReviewsModule,
+    AdminModule,
+    OffersModule,
+    UploadthingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

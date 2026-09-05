@@ -1,4 +1,5 @@
 import { api } from "@/lib/axios";
+import { getApiErrorMessage } from "@/lib/api-error";
 import { useQuery } from "@tanstack/react-query";
 import { HealthCheckResponse } from "@food-delivery/types";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
@@ -27,7 +28,7 @@ export default function HomeScreen() {
       {error ? (
         <View style={styleSheet.errorBox}>
           <Text style={styleSheet.errorText}>
-            {error instanceof Error ? error.message : 'Could not reach the API'}
+            {getApiErrorMessage(error, 'Could not reach the API')}
           </Text>
         </View>
       ) : null}

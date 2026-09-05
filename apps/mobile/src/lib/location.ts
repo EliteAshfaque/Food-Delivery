@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import { Platform } from 'react-native';
 
 export type Coordinates = { latitude: number; longitude: number };
 
@@ -17,15 +18,38 @@ export async function getCurrentCoordinates(): Promise<Coordinates | null> {
 }
 
 export async function getCoordinatesForAddress(address: string): Promise<Coordinates | null> {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== 'granted') return null;
+  const query = address.trim();
+  if (!query) return null;
 
-  const [result] = await Location.geocodeAsync(address);
+  // Expo requires foreground permission before geocoding on Android. iOS does
+  // not, so an iPhone user can still search an address after declining GPS.
+  if (Platform.OS === 'android') {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') return null;
+  }
+
+  const [result] = await Location.geocodeAsync(query);
   if (!result) return null;
   return { latitude: result.latitude, longitude: result.longitude };
 }
 
 export async function getAddressForCoordinates(coordinates: Coordinates) {
+  if (
+    !Number.isFinite(coordinates.latitude) ||
+    !Number.isFinite(coordinates.longitude) ||
+    coordinates.latitude < -90 ||
+    coordinates.latitude > 90 ||
+    coordinates.longitude < -180 ||
+    coordinates.longitude > 180
+  ) {
+    return null;
+  }
+
+  if (Platform.OS === 'android') {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') return null;
+  }
+
   const [place] = await Location.reverseGeocodeAsync(coordinates);
   if (!place) return null;
 

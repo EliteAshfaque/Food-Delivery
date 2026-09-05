@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   ScrollView,
@@ -24,9 +25,27 @@ import { AppIcon, type FoodIconName } from "@/components/wasil-icon-system";
 import { LocationPicker } from "@/components/location-picker";
 import { useAuth } from "@/context/auth-context";
 import { CategoryTile } from "@/components/wasil-ui-components";
+import { RequestErrorState } from "@/components/request-error-state";
 import type { Restaurant } from "@food-delivery/types";
 import { distanceInKm, getCurrentCoordinates, type Coordinates } from "@/lib/location";
+import { formatCurrency } from "@/lib/format";
 import * as SecureStore from "expo-secure-store";
+
+type HotOffer = {
+  id: string;
+  title: string;
+  code: string | null;
+  discountType: "PERCENTAGE" | "FIXED_AMOUNT";
+  discountValue: string;
+  minimumOrderAmount: string;
+  restaurant: {
+    id: string;
+    name: string;
+    imageUrl: string | null;
+    cuisineType: string | null;
+    rating: string | number;
+  };
+};
 
 const CUISINE_FILTERS = [
   "All",
@@ -71,18 +90,30 @@ function getDistance(customer: Coordinates | null, restaurant: Restaurant) {
   }).toFixed(1)} km`;
 }
 
-// Placeholder until real delivery ETA is calculated.
-function getPlaceholderDeliveryTime(restaurantId: string) {
-  let hash = 0;
-  for (let i = 0; i < restaurantId.length; i += 1) {
-    hash = (hash + restaurantId.charCodeAt(i)) % 100;
+// Do not invent an ETA from the restaurant ID. A real ETA depends on the
+// selected delivery pin, kitchen load, and an assigned driver's route.
+const DELIVERY_TIME_LABEL = "ETA at checkout";
+
+function displayText(value: string | null | undefined, fallback: string) {
+  return value?.trim() || fallback;
+}
+
+function formatOfferValue(offer: HotOffer) {
+  if (offer.discountType === "PERCENTAGE") {
+    return `${Number(offer.discountValue)}% OFF`;
   }
-  const min = 20 + (hash % 20);
-  return `${min}-${min + 10} min`;
+  return `${formatCurrency(offer.discountValue)} OFF`;
 }
 
 function locationPromptKey(userId: string) {
-  return `customer-location-prompted-${userId}`;
+  // SecureStore accepts only a restricted key alphabet. User IDs normally are
+  // UUIDs, but a provider-managed identifier can contain other characters.
+  // Hash it instead of passing an external identifier directly to SecureStore.
+  let hash = 0;
+  for (let index = 0; index < userId.length; index += 1) {
+    hash = (hash * 31 + userId.charCodeAt(index)) | 0;
+  }
+  return `customer-location-prompted-${(hash >>> 0).toString(36)}`;
 }
 
 export default function CustomerHomeScreen() {
@@ -104,8 +135,11 @@ export default function CustomerHomeScreen() {
 
   const {
     data: restaurants = [],
+    error: restaurantsError,
+    isError: restaurantsIsError,
     isLoading,
     isFetching,
+    refetch: refetchRestaurants,
   } = useQuery<Restaurant[]>({
     queryKey: ["restaurants", querySearch ?? ""],
     queryFn: () =>
@@ -114,6 +148,12 @@ export default function CustomerHomeScreen() {
           params: querySearch ? { search: querySearch } : undefined,
         })
         .then((res) => res.data),
+  });
+
+  const { data: hotOffers = [] } = useQuery<HotOffer[]>({
+    queryKey: ["hot-offers"],
+    queryFn: () => api.get<HotOffer[]>("/offers/hot").then((res) => res.data),
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -174,13 +214,19 @@ export default function CustomerHomeScreen() {
     try {
       const coords = await getCurrentCoordinates();
       if (!coords) {
-        alert("Location is optional. Allow it only if you want to see restaurant distance.");
+        Alert.alert(
+          "Location is optional",
+          "Allow it only if you want to see restaurant distance.",
+        );
         return;
       }
       setCustomerLocation(coords);
       setMapPickerVisible(true);
     } catch {
-      alert("We couldn't get your location. You can still browse and enter a delivery address at checkout.");
+      Alert.alert(
+        "Location unavailable",
+        "You can still browse and enter a delivery address at checkout.",
+      );
     } finally {
       setIsLocating(false);
     }
@@ -296,6 +342,46 @@ export default function CustomerHomeScreen() {
               </ScrollView>
             </Animated.View>
 
+            {hotOffers.length > 0 ? (
+              <Animated.View entering={homeEntrance(205, 350)}>
+                <View style={styles.offerHeading}>
+                  <View>
+                    <Text style={styles.categoryTitle}>Hot offers</Text>
+                    <Text style={styles.offerHint}>Fresh value from open kitchens</Text>
+                  </View>
+                  <View style={styles.offerLivePill}>
+                    <View style={styles.offerLiveDot} />
+                    <Text style={styles.offerLiveText}>LIVE</Text>
+                  </View>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.offerRow}
+                >
+                  {hotOffers.map((offer) => (
+                    <Pressable
+                      accessibilityHint="Open this restaurant's menu"
+                      accessibilityLabel={`${formatOfferValue(offer)} at ${displayText(offer.restaurant.name, "this restaurant")}`}
+                      accessibilityRole="button"
+                      key={offer.id}
+                      onPress={() => openRestaurant(offer.restaurant.id)}
+                      style={({ pressed }) => [styles.offerCard, pressed && styles.cardPressed]}
+                    >
+                      <View style={styles.offerGlow} />
+                      <Text style={styles.offerValue}>{formatOfferValue(offer)}</Text>
+                      <Text numberOfLines={1} style={styles.offerTitle}>{offer.title}</Text>
+                      <Text numberOfLines={1} style={styles.offerRestaurant}>{displayText(offer.restaurant.name, "Local kitchen")}</Text>
+                      <View style={styles.offerFooter}>
+                        <Text style={styles.offerCode}>{offer.code || "AUTO APPLIED"}</Text>
+                        {Number(offer.minimumOrderAmount) > 0 ? <Text style={styles.offerMinimum}>Min. {formatCurrency(offer.minimumOrderAmount)}</Text> : null}
+                      </View>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </Animated.View>
+            ) : null}
+
             <Animated.View entering={homeEntrance(230, 360)}>
               <ScrollView
                 horizontal
@@ -350,7 +436,7 @@ export default function CustomerHomeScreen() {
           >
             <Pressable
               accessibilityHint="View restaurant and menu"
-              accessibilityLabel={`${item.name.trim() || "Local kitchen"}, ${item.cuisineType.trim() || "Open kitchen"}, ${formatRating(item.rating)} stars, ${getPlaceholderDeliveryTime(item.id)} delivery, ${item.isOpen ? "open" : "closed"}`}
+              accessibilityLabel={`${displayText(item.name, "Local kitchen")}, ${displayText(item.cuisineType, "Open kitchen")}, ${formatRating(item.rating)} stars, ${DELIVERY_TIME_LABEL}, ${item.isOpen ? "open" : "closed"}`}
               accessibilityRole="button"
               style={({ pressed }) => [
                 styles.card,
@@ -369,7 +455,7 @@ export default function CustomerHomeScreen() {
               <View style={styles.cardBody}>
                 <View style={styles.cardTopRow}>
                   <Text style={styles.cardName} numberOfLines={1}>
-                    {item.name.trim() || "Local kitchen"}
+                    {displayText(item.name, "Local kitchen")}
                   </Text>
                   <View
                     style={[
@@ -391,10 +477,10 @@ export default function CustomerHomeScreen() {
                 </View>
 
                 <Text style={styles.cardCuisine}>
-                  {item.cuisineType.trim() || "Open kitchen"}
+                  {displayText(item.cuisineType, "Open kitchen")}
                 </Text>
                 <Text style={styles.cardAddress} numberOfLines={1}>
-                  {item.address.trim() || "Delivery available"}
+                  {displayText(item.address, "Delivery available")}
                 </Text>
 
                 <View style={styles.metaRow}>
@@ -427,7 +513,7 @@ export default function CustomerHomeScreen() {
                       color={brand.colors.light.inkMuted}
                     />
                     <Text style={styles.metaText}>
-                      {getPlaceholderDeliveryTime(item.id)}
+                      {DELIVERY_TIME_LABEL}
                     </Text>
                   </View>
                 </View>
@@ -453,6 +539,12 @@ export default function CustomerHomeScreen() {
               />
               <Text style={styles.loadingText}>Finding restaurants...</Text>
             </View>
+          ) : restaurantsIsError ? (
+            <RequestErrorState
+              error={restaurantsError}
+              onRetry={() => void refetchRestaurants()}
+              title="Couldn’t load restaurants"
+            />
           ) : (
             <View style={styles.centered}>
               <View style={styles.emptyIcon}>
@@ -578,6 +670,96 @@ const styles = StyleSheet.create({
   categoryRow: {
     gap: 14,
     paddingBottom: 24,
+  },
+  offerHeading: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 11,
+  },
+  offerHint: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  offerLivePill: {
+    alignItems: "center",
+    backgroundColor: "#E7F6F0",
+    borderRadius: brand.radius.pill,
+    flexDirection: "row",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  offerLiveDot: {
+    backgroundColor: brand.colors.light.mint,
+    borderRadius: 3,
+    height: 6,
+    width: 6,
+  },
+  offerLiveText: {
+    color: brand.colors.light.mint,
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.7,
+  },
+  offerRow: {
+    gap: 10,
+    paddingBottom: 22,
+  },
+  offerCard: {
+    backgroundColor: brand.colors.light.ink,
+    borderRadius: brand.radius.medium,
+    minHeight: 150,
+    overflow: "hidden",
+    padding: 15,
+    width: 218,
+  },
+  offerGlow: {
+    backgroundColor: brand.colors.light.primary,
+    borderRadius: 80,
+    height: 145,
+    opacity: 0.2,
+    position: "absolute",
+    right: -55,
+    top: -65,
+    width: 145,
+  },
+  offerValue: {
+    color: brand.colors.light.accent,
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: -0.5,
+  },
+  offerTitle: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+    marginTop: 8,
+  },
+  offerRestaurant: {
+    color: "#DCCDD4",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 3,
+  },
+  offerFooter: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: "auto",
+  },
+  offerCode: {
+    color: "#FFB09D",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  offerMinimum: {
+    color: "#DCCDD4",
+    fontSize: 9,
+    fontWeight: "700",
   },
   filtersRow: {
     gap: 8,

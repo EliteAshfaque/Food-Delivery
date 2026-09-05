@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Post,
   Request,
   UseGuards,
@@ -33,24 +34,24 @@ export class ReviewsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.CUSTOMER)
   findByOrder(
-    @Param('orderId') orderId: string,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
     @Request() req: AuthRequest,
   ) {
     return this.reviewsService.findByOrder(orderId, req.user.sub);
   }
 
   @Get('restaurant/:restaurantId')
-  findByRestaurant(@Param('restaurantId') restaurantId: string) {
+  findByRestaurant(@Param('restaurantId', ParseUUIDPipe) restaurantId: string) {
     return this.reviewsService.findByRestaurant(restaurantId);
   }
 
   @Get('driver/:driverId')
-  getDriverRating(@Param('driverId') driverId: string) {
+  getDriverRating(@Param('driverId', ParseUUIDPipe) driverId: string) {
     return this.reviewsService.getDriverRating(driverId);
   }
 
   @Get('driver/:driverId/list')
-  findByDriver(@Param('driverId') driverId: string) {
+  findByDriver(@Param('driverId', ParseUUIDPipe) driverId: string) {
     return this.reviewsService.findByDriver(driverId);
   }
 }

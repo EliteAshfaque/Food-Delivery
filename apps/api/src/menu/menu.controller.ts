@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Request,
@@ -32,15 +33,12 @@ export class MenuController {
   @Post('categories')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER)
-  createCategory(
-    @Request() req: AuthRequest,
-    @Body() dto: CreateCategoryDto,
-  ) {
+  createCategory(@Request() req: AuthRequest, @Body() dto: CreateCategoryDto) {
     return this.menuService.createCategory(req.user.sub, dto);
   }
 
   @Get('categories/:restaurantId')
-  getCategories(@Param('restaurantId') restaurantId: string) {
+  getCategories(@Param('restaurantId', ParseUUIDPipe) restaurantId: string) {
     return this.menuService.getCategories(restaurantId);
   }
 
@@ -48,7 +46,7 @@ export class MenuController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER)
   updateCategory(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Request() req: AuthRequest,
     @Body() dto: UpdateCategoryDto,
   ) {
@@ -59,7 +57,7 @@ export class MenuController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER)
   deleteCategory(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Request() req: AuthRequest,
   ) {
     return this.menuService.deleteCategory(id, req.user.sub);
@@ -70,15 +68,12 @@ export class MenuController {
   @Post('items')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER)
-  createItem(
-    @Request() req: AuthRequest,
-    @Body() dto: CreateMenuItemDto,
-  ) {
+  createItem(@Request() req: AuthRequest, @Body() dto: CreateMenuItemDto) {
     return this.menuService.createItem(req.user.sub, dto);
   }
 
   @Get('items/:restaurantId')
-  getItems(@Param('restaurantId') restaurantId: string) {
+  getItems(@Param('restaurantId', ParseUUIDPipe) restaurantId: string) {
     return this.menuService.getItemsByRestaurant(restaurantId);
   }
 
@@ -86,7 +81,7 @@ export class MenuController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER)
   updateItem(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Request() req: AuthRequest,
     @Body() dto: UpdateMenuItemDto,
   ) {
@@ -97,7 +92,7 @@ export class MenuController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER)
   deleteItem(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Request() req: AuthRequest,
   ) {
     return this.menuService.deleteItem(id, req.user.sub);

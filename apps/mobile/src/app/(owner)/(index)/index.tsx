@@ -12,6 +12,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { api } from "@/lib/axios";
+import { getApiErrorMessage } from "@/lib/api-error";
+import { formatCurrency } from "@/lib/format";
 import {
   useRestaurantDriverLocation,
   useRestaurantSocket,
@@ -48,7 +50,7 @@ type DriverAvailability = {
 function formatPrice(price: string) {
   const value = Number.parseFloat(price);
   if (Number.isNaN(value)) return price;
-  return `$${value.toFixed(2)}`;
+  return formatCurrency(value);
 }
 
 function formatStatus(status: OrderStatusType) {
@@ -139,7 +141,9 @@ export default function OwnerHomeScreen() {
     queryFn: () => api.get("/restaurants/mine").then((res) => res.data),
   });
 
-  const restaurantOrderUpdate = useRestaurantSocket(restaurant?.id ?? null);
+  const restaurantOrderUpdate = useRestaurantSocket<OwnerOrder>(
+    restaurant?.id ?? null,
+  );
   const approachingDriverLocation = useRestaurantDriverLocation(
     restaurant?.id ?? null,
   );
@@ -202,7 +206,7 @@ export default function OwnerHomeScreen() {
       queryClient.invalidateQueries({ queryKey: ["my-restaurants"] });
     },
     onError: (error) => {
-      Alert.alert("Error", error.message);
+      Alert.alert("Could not update restaurant", getApiErrorMessage(error));
     },
   });
 
@@ -227,7 +231,7 @@ export default function OwnerHomeScreen() {
       });
     },
     onError: (error) => {
-      Alert.alert("Error", error.message);
+      Alert.alert("Could not update order", getApiErrorMessage(error));
     },
   });
 
