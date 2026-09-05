@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import MapView, { Marker, type Region } from 'react-native-maps';
+import { Platform, StyleSheet, Text, View } from 'react-native';
+import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
 
 import { AppIcon } from '@/components/wasil-icon-system';
 import { brand } from '@/constants/brand';
@@ -41,6 +41,8 @@ export function OrderTrackingMap({
   delivery,
   driver,
   live = false,
+  destinationTitle = 'Your delivery',
+  destinationDescription = 'Drop-off location',
 }: OrderTrackingMapProps) {
   const mapRef = useRef<MapView>(null);
 
@@ -52,6 +54,7 @@ export function OrderTrackingMap({
   return (
     <View style={styles.wrap}>
       <MapView
+        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         ref={mapRef}
         style={styles.map}
         initialRegion={regionForPoints(delivery, driver)}
@@ -60,8 +63,8 @@ export function OrderTrackingMap({
         rotateEnabled={false}>
         <Marker
           coordinate={delivery}
-          title="Your delivery"
-          description="Drop-off location"
+          title={destinationTitle}
+          description={destinationDescription}
           pinColor={brand.colors.light.primary}
         />
         {driver ? (

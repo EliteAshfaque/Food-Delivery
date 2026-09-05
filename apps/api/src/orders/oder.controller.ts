@@ -55,6 +55,13 @@ export class OrdersController {
     return this.ordersService.findByRestaurant(restaurantId, req.user.sub);
   }
 
+  @Get('driver-availability')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RESTAURANT_OWNER)
+  getDriverAvailability() {
+    return this.ordersService.getDriverAvailability();
+  }
+
   @Patch(':id/status')
   @UseGuards(RolesGuard)
   @Roles(UserRole.RESTAURANT_OWNER, UserRole.DRIVER)

@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class UpdateRestaurantDto {
   @IsString()
@@ -12,6 +12,18 @@ export class UpdateRestaurantDto {
   @IsString()
   @IsOptional()
   address?: string;
+
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  @IsOptional()
+  latitude?: number;
+
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  @IsOptional()
+  longitude?: number;
 
   @IsString()
   @IsOptional()

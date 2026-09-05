@@ -19,6 +19,11 @@ import { brand } from "@/constants/brand";
 import { WasilMark } from "@/components/wasil-brand";
 import { AppIcon } from "@/components/wasil-icon-system";
 import { WasilImage } from "@/components/wasil-image";
+import { LocationPicker } from "@/components/location-picker";
+import {
+  getAddressForCoordinates,
+  getCoordinatesForAddress,
+} from "@/lib/location";
 
 function formatPrice(value: number) {
   return `$${value.toFixed(2)}`;
@@ -31,6 +36,7 @@ export default function CustomerCartScreen() {
     longitude: number;
   } | null>(null);
   const [locating, setLocating] = useState(false);
+  const [isMapPickerVisible, setMapPickerVisible] = useState(false);
   const {
     items,
     restaurantId,
@@ -91,7 +97,7 @@ export default function CustomerCartScreen() {
       };
       setDeliveryCoords(coords);
 
-      const [place] = await Location.reverseGeocodeAsync(coords);
+      const [place] = await Location.reverseGeocodeAsync(coords).catch(() => []);
       if (place) {
         const parts = [
           place.name,
@@ -104,6 +110,8 @@ export default function CustomerCartScreen() {
           setDeliveryAddress(parts.join(", "));
         }
       }
+
+      setMapPickerVisible(true);
 
       return coords;
     } catch {
@@ -130,19 +138,37 @@ export default function CustomerCartScreen() {
       return;
     }
 
-    let coords = deliveryCoords;
-    if (!coords) {
-      coords = await captureCurrentLocation();
-      if (!coords) {
-        Alert.alert(
-          "Delivery location required",
-          "Tap “Use my location” so the driver knows where to deliver.",
-        );
-        return;
-      }
+    if (!deliveryCoords) {
+      Alert.alert(
+        "Delivery pin required",
+        "Use your current location or locate the address you entered so the driver can find you.",
+      );
+      return;
     }
 
-    placeOrder(coords);
+    placeOrder(deliveryCoords);
+  }
+
+  async function locateEnteredAddress() {
+    if (!deliveryAddress.trim()) {
+      Alert.alert("Enter an address", "Add your street, building, or area first.");
+      return;
+    }
+
+    setLocating(true);
+    try {
+      const coords = await getCoordinatesForAddress(deliveryAddress.trim());
+      if (!coords) {
+        Alert.alert("Address not found", "Try adding a city, area, or building number, or use your current location.");
+        return;
+      }
+      setDeliveryCoords(coords);
+      Alert.alert("Delivery pin set", "The driver will receive this pin only for this order.");
+    } catch {
+      Alert.alert("Address unavailable", "We couldn't locate that address. Try again or use your current location.");
+    } finally {
+      setLocating(false);
+    }
   }
 
   if (items.length === 0) {
@@ -221,7 +247,7 @@ export default function CustomerCartScreen() {
               size="sm"
               color={brand.colors.light.primary}
             />
-            <Text style={styles.label}>Delivery address</Text>
+            <Text style={styles.label}>Delivery address and map pin</Text>
           </View>
           <TextInput
             style={styles.input}
@@ -252,6 +278,20 @@ export default function CustomerCartScreen() {
               </>
             )}
           </Pressable>
+          <Pressable
+            style={styles.mapButton}
+            onPress={() => setMapPickerVisible(true)}
+          >
+            <AppIcon name="map" size="sm" color={brand.colors.light.primary} />
+            <Text style={styles.locationButtonText}>Search or choose delivery pin on map</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.locationButton, locating && styles.buttonDisabled]}
+            disabled={locating}
+            onPress={() => void locateEnteredAddress()}>
+            <AppIcon name="map" size="sm" color={brand.colors.light.primary} />
+            <Text style={styles.locationButtonText}>Locate entered address</Text>
+          </Pressable>
           {deliveryCoords ? (
             <Text style={styles.coordsHint}>
               GPS locked · {deliveryCoords.latitude.toFixed(5)},{" "}
@@ -259,7 +299,7 @@ export default function CustomerCartScreen() {
             </Text>
           ) : (
             <Text style={styles.coordsHint}>
-              Your real GPS pin is shared with the driver at checkout.
+              Use current GPS, search a city/address on the map, or type an address. The exact pin is shared only with your driver for this order.
             </Text>
           )}
         </View>
@@ -293,6 +333,21 @@ export default function CustomerCartScreen() {
           )}
         </Pressable>
       </View>
+      <LocationPicker
+        initialCoordinates={deliveryCoords}
+        onClose={() => setMapPickerVisible(false)}
+        onConfirm={(coordinates) => {
+          setDeliveryCoords(coordinates);
+          setMapPickerVisible(false);
+          void getAddressForCoordinates(coordinates)
+            .then((detectedAddress) => {
+              if (detectedAddress) setDeliveryAddress(detectedAddress);
+            })
+            .catch(() => undefined);
+        }}
+        title="Delivery location"
+        visible={isMapPickerVisible}
+      />
     </View>
   );
 }
@@ -477,6 +532,14 @@ const styles = StyleSheet.create({
     marginTop: 10,
     minHeight: 46,
     paddingHorizontal: 14,
+  },
+  mapButton: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "center",
+    marginTop: 10,
+    paddingVertical: 10,
   },
   locationButtonText: {
     color: brand.colors.light.primaryText,

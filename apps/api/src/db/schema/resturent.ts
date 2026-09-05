@@ -6,6 +6,7 @@ import {
   numeric,
   uuid,
   boolean,
+  doublePrecision,
 } from 'drizzle-orm/pg-core';
 import { user } from './user';
 export const restaurants = pgTable('restaurants', {
@@ -17,6 +18,8 @@ export const restaurants = pgTable('restaurants', {
   description: text('description'),
   imageUrl: text('image_url'),
   address: text('address').notNull(),
+  latitude: doublePrecision('latitude'),
+  longitude: doublePrecision('longitude'),
   cuisineType: text('cuisine_type'),
   isOpen: boolean('is_open').default(false).notNull(),
   rating: numeric('rating', { precision: 10, scale: 2 })

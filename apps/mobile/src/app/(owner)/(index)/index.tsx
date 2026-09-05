@@ -12,7 +12,11 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { api } from "@/lib/axios";
-import { useRestaurantSocket } from "@/hooks/user-order.socket";
+import {
+  useRestaurantDriverLocation,
+  useRestaurantSocket,
+} from "@/hooks/user-order.socket";
+import { OrderTrackingMap } from "@/components/order-tracking-map";
 import {
   OrderStatus,
   type OrderStatus as OrderStatusType,
@@ -34,6 +38,11 @@ type StatusAction = {
   label: string;
   status: OrderStatusType;
   tone: "primary" | "danger";
+};
+
+type DriverAvailability = {
+  available: boolean;
+  availableDrivers: number;
 };
 
 function formatPrice(price: string) {
@@ -131,6 +140,9 @@ export default function OwnerHomeScreen() {
   });
 
   const restaurantOrderUpdate = useRestaurantSocket(restaurant?.id ?? null);
+  const approachingDriverLocation = useRestaurantDriverLocation(
+    restaurant?.id ?? null,
+  );
 
   const {
     data: orders = [],
@@ -146,6 +158,14 @@ export default function OwnerHomeScreen() {
     enabled: !!restaurant?.id,
     refetchInterval: 15000,
   });
+
+  const { data: driverAvailability, isLoading: availabilityLoading } =
+    useQuery<DriverAvailability>({
+      queryKey: ["driver-availability"],
+      queryFn: () =>
+        api.get("/orders/driver-availability").then((res) => res.data),
+      refetchInterval: 10000,
+    });
 
   useEffect(() => {
     if (!restaurantOrderUpdate || !restaurant?.id) return;
@@ -250,6 +270,13 @@ export default function OwnerHomeScreen() {
   const activeCount = orders.filter((order) =>
     isActiveOrder(order.status),
   ).length;
+  const driverHeadingToPickup = orders.some(
+    (order) => order.status === OrderStatus.READY,
+  );
+  const restaurantCoordinates =
+    restaurant?.latitude != null && restaurant.longitude != null
+      ? { latitude: restaurant.latitude, longitude: restaurant.longitude }
+      : null;
 
   return (
     <View style={styles.container}>
@@ -313,6 +340,39 @@ export default function OwnerHomeScreen() {
                 <ActivityIndicator size="small" color="#FF6B35" />
               ) : null}
             </View>
+            <View
+              style={[
+                styles.driverAvailability,
+                driverAvailability?.available
+                  ? styles.driverAvailable
+                  : styles.driverUnavailable,
+              ]}
+            >
+              <Text style={styles.driverAvailabilityText}>
+                {availabilityLoading
+                  ? "Checking delivery drivers…"
+                  : driverAvailability?.available
+                    ? `${driverAvailability.availableDrivers} driver${driverAvailability.availableDrivers === 1 ? "" : "s"} available`
+                    : "No delivery drivers available — keep orders preparing"}
+              </Text>
+            </View>
+            {driverHeadingToPickup &&
+            restaurantCoordinates &&
+            approachingDriverLocation ? (
+              <View style={styles.driverMapCard}>
+                <Text style={styles.driverMapTitle}>Driver approaching pickup</Text>
+                <Text style={styles.driverMapHint}>
+                  Live location shared by the driver
+                </Text>
+                <OrderTrackingMap
+                  delivery={restaurantCoordinates}
+                  destinationTitle={restaurant?.name ?? "Restaurant"}
+                  destinationDescription="Restaurant pickup point"
+                  driver={approachingDriverLocation}
+                  live
+                />
+              </View>
+            ) : null}
           </View>
         }
         ListEmptyComponent={
@@ -365,38 +425,45 @@ export default function OwnerHomeScreen() {
 
               {actions.length > 0 ? (
                 <View style={styles.actionsRow}>
-                  {actions.map((action) => (
-                    <Pressable
-                      key={action.status}
-                      style={[
-                        styles.actionButton,
-                        action.tone === "primary"
-                          ? styles.actionPrimary
-                          : styles.actionDanger,
-                        isUpdating && styles.buttonDisabled,
-                      ]}
-                      onPress={() => handleStatusAction(item.id, action)}
-                      disabled={isUpdating}
-                    >
-                      {isUpdating ? (
-                        <ActivityIndicator
-                          color={action.tone === "primary" ? "#fff" : "#DC2626"}
-                          size="small"
-                        />
-                      ) : (
-                        <Text
+                  {actions.map((action) => {
+                      const requiresDriver = action.status === OrderStatus.READY;
+                      const unavailable =
+                        requiresDriver &&
+                        (availabilityLoading || !driverAvailability?.available);
+
+                      return (
+                        <Pressable
+                          key={action.status}
                           style={[
-                            styles.actionText,
+                            styles.actionButton,
                             action.tone === "primary"
-                              ? styles.actionTextPrimary
-                              : styles.actionTextDanger,
+                              ? styles.actionPrimary
+                              : styles.actionDanger,
+                            (isUpdating || unavailable) && styles.buttonDisabled,
                           ]}
+                          onPress={() => handleStatusAction(item.id, action)}
+                          disabled={isUpdating || unavailable}
                         >
-                          {action.label}
-                        </Text>
-                      )}
-                    </Pressable>
-                  ))}
+                          {isUpdating ? (
+                            <ActivityIndicator
+                              color={action.tone === "primary" ? "#fff" : "#DC2626"}
+                              size="small"
+                            />
+                          ) : (
+                            <Text
+                              style={[
+                                styles.actionText,
+                                action.tone === "primary"
+                                  ? styles.actionTextPrimary
+                                  : styles.actionTextDanger,
+                              ]}
+                            >
+                              {action.label}
+                            </Text>
+                          )}
+                        </Pressable>
+                      );
+                    })}
                 </View>
               ) : (
                 <Text style={styles.noActionText}>
@@ -508,6 +575,34 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#111",
   },
+  driverAvailability: {
+    borderRadius: 10,
+    marginBottom: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  driverAvailable: {
+    backgroundColor: "#DCFCE7",
+  },
+  driverUnavailable: {
+    backgroundColor: "#FEF3C7",
+  },
+  driverAvailabilityText: {
+    color: "#444",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  driverMapCard: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#EEE",
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 16,
+    overflow: "hidden",
+    padding: 12,
+  },
+  driverMapTitle: { color: "#111", fontSize: 16, fontWeight: "800" },
+  driverMapHint: { color: "#666", fontSize: 13, marginBottom: 10, marginTop: 3 },
   emptyState: {
     alignItems: "center",
     paddingVertical: 48,

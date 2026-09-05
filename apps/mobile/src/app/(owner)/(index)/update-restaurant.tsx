@@ -18,6 +18,12 @@ import { router } from 'expo-router';
 import type { Restaurant } from '@food-delivery/types';
 
 import { api } from '@/lib/axios';
+import {
+  getAddressForCoordinates,
+  getCurrentCoordinates,
+  type Coordinates,
+} from '@/lib/location';
+import { LocationPicker } from '@/components/location-picker';
 import { useImageUploader } from '../../../lib/uploadthing';
 
 export default function UpdateRestaurantScreen() {
@@ -32,6 +38,9 @@ export default function UpdateRestaurantScreen() {
   const [address, setAddress] = useState('');
   const [cuisineType, setCuisineType] = useState('');
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [isMapPickerVisible, setMapPickerVisible] = useState(false);
 
   useEffect(() => {
     if (!restaurant) return;
@@ -40,6 +49,11 @@ export default function UpdateRestaurantScreen() {
     setAddress(restaurant.address ?? '');
     setCuisineType(restaurant.cuisineType ?? '');
     setImageUrl(restaurant.imageUrl ?? null);
+    setCoordinates(
+      restaurant.latitude != null && restaurant.longitude != null
+        ? { latitude: restaurant.latitude, longitude: restaurant.longitude }
+        : null,
+    );
   }, [restaurant]);
 
   const { openImagePicker, isUploading } = useImageUploader('restaurantImage', {
@@ -60,6 +74,8 @@ export default function UpdateRestaurantScreen() {
         address,
         cuisineType,
         imageUrl,
+        latitude: coordinates?.latitude,
+        longitude: coordinates?.longitude,
       });
       return data;
     },
@@ -102,6 +118,27 @@ export default function UpdateRestaurantScreen() {
         );
       },
     });
+  }
+
+  async function useCurrentLocation() {
+    setLocating(true);
+    try {
+      const coords = await getCurrentCoordinates();
+      if (!coords) {
+        Alert.alert('Location not shared', 'You can keep your existing restaurant pin.');
+        return;
+      }
+      setCoordinates(coords);
+      const detectedAddress = await getAddressForCoordinates(coords).catch(
+        () => null,
+      );
+      if (detectedAddress) setAddress(detectedAddress);
+      setMapPickerVisible(true);
+    } catch {
+      Alert.alert('Location unavailable', 'Please check your device location settings and try again.');
+    } finally {
+      setLocating(false);
+    }
   }
 
   const isBusy = isPending || isUploading;
@@ -203,6 +240,30 @@ export default function UpdateRestaurantScreen() {
             value={address}
             onChangeText={setAddress}
           />
+          <Pressable
+            style={styles.locationButton}
+            onPress={() => void useCurrentLocation()}
+            disabled={locating}>
+            {locating ? (
+              <ActivityIndicator color="#FF6B35" />
+            ) : (
+              <Text style={styles.locationButtonText}>
+                {coordinates
+                  ? 'Update restaurant map pin'
+                  : 'Use my current restaurant location'}
+              </Text>
+            )}
+          </Pressable>
+          <Pressable
+            style={styles.mapButton}
+            onPress={() => setMapPickerVisible(true)}>
+            <Text style={styles.mapButtonText}>
+              Choose restaurant location on map
+            </Text>
+          </Pressable>
+          <Text style={styles.locationHint}>
+            The pin is used to calculate customer distance.
+          </Text>
         </View>
 
         <View style={styles.field}>
@@ -227,6 +288,22 @@ export default function UpdateRestaurantScreen() {
           )}
         </Pressable>
       </ScrollView>
+      <LocationPicker
+        initialCoordinates={coordinates}
+        onClose={() => setMapPickerVisible(false)}
+        onConfirm={(selected) => {
+          setCoordinates(selected);
+          setMapPickerVisible(false);
+          void getAddressForCoordinates(selected)
+            .then((detectedAddress) => {
+              if (detectedAddress) setAddress(detectedAddress);
+            })
+            .catch(() => undefined);
+          Alert.alert('Map pin selected', 'Tap Save changes to update your restaurant location.');
+        }}
+        title="Restaurant location"
+        visible={isMapPickerVisible}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -343,6 +420,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#fafafa',
     color: '#111',
   },
+  locationButton: {
+    alignItems: 'center',
+    borderColor: '#FF6B35',
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 10,
+    padding: 12,
+  },
+  locationButtonText: { color: '#FF6B35', fontWeight: '600' },
+  mapButton: { alignItems: 'center', marginTop: 10, padding: 8 },
+  mapButtonText: { color: '#444', fontWeight: '600' },
+  locationHint: { color: '#666', fontSize: 12, lineHeight: 17, marginTop: 8 },
   multiline: {
     minHeight: 96,
     paddingTop: 14,

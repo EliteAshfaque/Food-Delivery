@@ -33,12 +33,16 @@ type DriverOrder = {
   status: OrderStatusType;
   totalAmount: string;
   deliveryAddress: string;
+  deliveryLatitude: number | null;
+  deliveryLongitude: number | null;
   restaurantId: string;
   createdAt: string;
   restaurant?: {
     id: string;
     name: string;
     address: string;
+    latitude: number | null;
+    longitude: number | null;
     imageUrl: string | null;
   };
 };
@@ -58,8 +62,18 @@ function formatStatus(status: OrderStatusType) {
   return status.replaceAll('_', ' ');
 }
 
-function openMaps(query: string) {
-  const encoded = encodeURIComponent(query);
+function openMaps({
+  address,
+  latitude,
+  longitude,
+}: {
+  address: string;
+  latitude?: number | null;
+  longitude?: number | null;
+}) {
+  const destination =
+    latitude != null && longitude != null ? `${latitude},${longitude}` : address;
+  const encoded = encodeURIComponent(destination);
   const url =
     Platform.OS === 'ios'
       ? `http://maps.apple.com/?daddr=${encoded}`
@@ -77,6 +91,7 @@ export default function DriverActiveScreen() {
   const socketRef = useRef<Socket | null>(null);
   const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [sharingEnabled, setSharingEnabled] = useState(false);
   const [liveCoords, setLiveCoords] = useState<LiveCoords | null>(null);
 
   const {
@@ -105,6 +120,7 @@ export default function DriverActiveScreen() {
       api.patch(`/orders/${orderId}/status`, { status }).then((res) => res.data),
     onSuccess: (_data, vars) => {
       if (vars.status === OrderStatus.DELIVERED) {
+        setSharingEnabled(false);
         stopTracking();
       }
       queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
@@ -130,8 +146,11 @@ export default function DriverActiveScreen() {
   const order = activeOrders[0] ?? null;
   const busy = updating || declining;
   const isEnRoute = order?.status === OrderStatus.PICKED_UP;
+  const isOnActiveRoute =
+    order?.status === OrderStatus.READY ||
+    order?.status === OrderStatus.PICKED_UP;
 
-  async function startTracking(orderId: string) {
+  async function startTracking(orderId: string, restaurantId: string) {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert(
@@ -164,6 +183,7 @@ export default function DriverActiveScreen() {
         socketRef.current?.emit('driver:location', {
           driverId: user?.id,
           orderId,
+          restaurantId,
           ...coords,
         });
       },
@@ -182,8 +202,8 @@ export default function DriverActiveScreen() {
   }
 
   useEffect(() => {
-    if (order?.status === OrderStatus.PICKED_UP) {
-      void startTracking(order.id);
+    if (isOnActiveRoute && sharingEnabled && order) {
+      void startTracking(order.id, order.restaurantId);
     } else {
       stopTracking();
     }
@@ -193,7 +213,14 @@ export default function DriverActiveScreen() {
     };
     // Restart only when the active delivery identity/status changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [order?.id, order?.status, user?.id]);
+  }, [isOnActiveRoute, order?.id, sharingEnabled, user?.id]);
+
+  // Each delivery requires a fresh, deliberate sharing choice.
+  useEffect(() => {
+    if (!isOnActiveRoute) {
+      setSharingEnabled(false);
+    }
+  }, [isOnActiveRoute, order?.id]);
 
   function nextAction(
     status: OrderStatusType,
@@ -239,8 +266,12 @@ export default function DriverActiveScreen() {
           <Text style={styles.subtitle}>
             {order
               ? isEnRoute
-                ? 'Your live location is shared with the customer until delivery.'
-                : 'Navigate to the restaurant, confirm pickup, then start sharing.'
+                ? sharingEnabled
+                  ? 'Your live location is shared with the customer until delivery.'
+                  : 'Choose whether to share your live location with the customer.'
+                : sharingEnabled
+                  ? 'Your live GPS is shared while you head to the restaurant.'
+                  : 'Navigate to the restaurant, then choose whether to share live GPS.'
               : 'Stay online on Home. Ready orders land here for you.'}
           </Text>
         </Animated.View>
@@ -295,7 +326,7 @@ export default function DriverActiveScreen() {
               </View>
             </View>
 
-            {isEnRoute ? (
+            {isOnActiveRoute ? (
               <View style={styles.liveCard}>
                 <View style={styles.liveHeader}>
                   <View style={styles.livePulse}>
@@ -303,10 +334,20 @@ export default function DriverActiveScreen() {
                   </View>
                   <View style={styles.liveCopy}>
                     <Text style={styles.liveTitle}>
-                      {isSharing ? 'Sharing live location' : 'Starting GPS…'}
+                      {isSharing
+                        ? isEnRoute
+                          ? 'Sharing live location'
+                          : 'Sharing GPS on the way to pickup'
+                        : sharingEnabled
+                          ? 'Starting GPS…'
+                          : 'Location sharing is off'}
                     </Text>
                     <Text style={styles.liveSubtitle}>
-                      Customer can track you on their order screen
+                      {sharingEnabled
+                        ? isEnRoute
+                          ? 'Customer can track you on their order screen'
+                          : 'Your live GPS is active while you travel to pickup'
+                        : 'Only you can see your location until you turn this on'}
                     </Text>
                   </View>
                   <AppIcon
@@ -376,9 +417,14 @@ export default function DriverActiveScreen() {
                   style={styles.navButton}
                   onPress={() =>
                     openMaps(
-                      order.restaurant?.address ||
-                        order.restaurant?.name ||
-                        'Restaurant',
+                      {
+                        address:
+                          order.restaurant?.address ||
+                          order.restaurant?.name ||
+                          'Restaurant',
+                        latitude: order.restaurant?.latitude,
+                        longitude: order.restaurant?.longitude,
+                      },
                     )
                   }>
                   <AppIcon
@@ -386,11 +432,17 @@ export default function DriverActiveScreen() {
                     name="navigation"
                     size="sm"
                   />
-                  <Text style={styles.navButtonText}>To restaurant</Text>
+                  <Text style={styles.navButtonText}>Navigate to pickup</Text>
                 </Pressable>
                 <Pressable
                   style={styles.navButton}
-                  onPress={() => openMaps(order.deliveryAddress)}>
+                  onPress={() =>
+                    openMaps({
+                      address: order.deliveryAddress,
+                      latitude: order.deliveryLatitude,
+                      longitude: order.deliveryLongitude,
+                    })
+                  }>
                   <AppIcon
                     color={brand.colors.light.ink}
                     name="map"
@@ -445,17 +497,30 @@ export default function DriverActiveScreen() {
                 </Pressable>
               ) : null}
 
-              {isEnRoute ? (
+              {isOnActiveRoute ? (
                 <Pressable
-                  style={styles.stopTrackButton}
+                  style={[
+                    styles.stopTrackButton,
+                    !sharingEnabled && styles.startTrackButton,
+                  ]}
                   onPress={() => {
-                    stopTracking();
-                    Alert.alert(
-                      'Tracking paused',
-                      'Location sharing stopped. Reopen this screen or pull to refresh to resume.',
-                    );
+                    if (sharingEnabled) {
+                      setSharingEnabled(false);
+                      stopTracking();
+                      return;
+                    }
+                    setSharingEnabled(true);
                   }}>
-                  <Text style={styles.stopTrackText}>Pause location sharing</Text>
+                  <Text style={[
+                    styles.stopTrackText,
+                    !sharingEnabled && styles.startTrackText,
+                  ]}>
+                    {sharingEnabled
+                      ? 'Pause location sharing'
+                      : isEnRoute
+                        ? 'Share live location'
+                        : 'Share GPS while heading to pickup'}
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -788,10 +853,17 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingVertical: 10,
   },
+  startTrackButton: {
+    backgroundColor: brand.colors.light.primary,
+    borderColor: brand.colors.light.primary,
+  },
   stopTrackText: {
     color: brand.colors.light.inkMuted,
     fontSize: 13,
     fontWeight: '700',
+  },
+  startTrackText: {
+    color: '#FFFFFF',
   },
   disabled: {
     opacity: 0.7,

@@ -127,6 +127,42 @@ export function useRestaurantSocket(restaurantId: string | null) {
   return orderUpdate;
 }
 
+/** Live driver GPS for an owner while the driver is heading to pickup. */
+export function useRestaurantDriverLocation(restaurantId: string | null) {
+  const [driverLocation, setDriverLocation] = useState<Coordinates | null>(null);
+
+  useEffect(() => {
+    if (!restaurantId) {
+      setDriverLocation(null);
+      return;
+    }
+
+    const s = getSocket();
+    s.connect();
+    s.emit('join:restaurant', restaurantId);
+
+    const handler = (data: {
+      restaurantId?: string;
+      latitude: number;
+      longitude: number;
+    }) => {
+      if (data.restaurantId === restaurantId) {
+        setDriverLocation({
+          latitude: data.latitude,
+          longitude: data.longitude,
+        });
+      }
+    };
+
+    s.on('driver:location', handler);
+    return () => {
+      s.off('driver:location', handler);
+    };
+  }, [restaurantId]);
+
+  return driverLocation;
+}
+
 /** Join driver room and listen for incoming delivery assignments. */
 export function useDriverSocket(driverId: string | null) {
   const [incomingOrder, setIncomingOrder] = useState<Record<string, unknown> | null>(

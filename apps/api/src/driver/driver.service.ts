@@ -68,12 +68,44 @@ export class DriverService {
         id: restaurant.id,
         name: restaurant.name,
         address: restaurant.address,
+        latitude: restaurant.latitude,
+        longitude: restaurant.longitude,
         imageUrl: restaurant.imageUrl,
       },
     }));
   }
 
   async assignDriver(orderId: string, excludeDriverId?: string) {
+    const availableDrivers = await this.findAvailableDrivers(excludeDriverId);
+
+    if (availableDrivers.length === 0) {
+      console.log('No available drivers for order:', orderId);
+      return null;
+    }
+
+    const selected = availableDrivers[0];
+
+    const [updatedOrder] = await this.db
+      .update(schema.orders)
+      .set({ driverId: selected.id, updatedAt: new Date() })
+      .where(eq(schema.orders.id, orderId))
+      .returning();
+
+    this.ordersGateway.emitDriverAssigned(selected.id, updatedOrder);
+    this.ordersGateway.emitOrderUpdate(updatedOrder);
+
+    return updatedOrder;
+  }
+
+  async getAvailability() {
+    const availableDrivers = await this.findAvailableDrivers();
+    return {
+      available: availableDrivers.length > 0,
+      availableDrivers: availableDrivers.length,
+    };
+  }
+
+  private async findAvailableDrivers(excludeDriverId?: string) {
     const conditions = [
       eq(schema.user.role, UserRole.DRIVER),
       eq(schema.user.isOnline, true),
@@ -89,13 +121,7 @@ export class DriverService {
       .from(schema.user)
       .where(and(...conditions));
 
-    if (onlineDrivers.length === 0) {
-      console.log('No online drivers available for order:', orderId);
-      return null;
-    }
-
-    let selected = onlineDrivers[0];
-
+    const availableDrivers = [] as typeof onlineDrivers;
     for (const candidate of onlineDrivers) {
       const [busy] = await this.db
         .select()
@@ -112,21 +138,11 @@ export class DriverService {
         .limit(1);
 
       if (!busy) {
-        selected = candidate;
-        break;
+        availableDrivers.push(candidate);
       }
     }
 
-    const [updatedOrder] = await this.db
-      .update(schema.orders)
-      .set({ driverId: selected.id, updatedAt: new Date() })
-      .where(eq(schema.orders.id, orderId))
-      .returning();
-
-    this.ordersGateway.emitDriverAssigned(selected.id, updatedOrder);
-    this.ordersGateway.emitOrderUpdate(updatedOrder);
-
-    return updatedOrder;
+    return availableDrivers;
   }
 
   async declineOrder(orderId: string, driverId: string) {

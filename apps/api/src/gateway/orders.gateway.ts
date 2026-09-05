@@ -13,6 +13,7 @@ import { LocationService } from '../location/location.service';
 export interface DriverLocation {
   driverId: string;
   orderId: string;
+  restaurantId: string;
   latitude: number;
   longitude: number;
 }
@@ -78,6 +79,11 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Forward to everyone in order:<orderId> room (customer tracking screen)
     this.server
       .to(`order:${location.orderId}`)
+      .emit('driver:location', location);
+
+    // Restaurant owners can see an opted-in driver approaching pickup.
+    this.server
+      .to(`restaurant:${location.restaurantId}`)
       .emit('driver:location', location);
   }
 

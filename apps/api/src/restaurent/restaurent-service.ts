@@ -34,6 +34,8 @@ import {
           name: dto.name,
           description: dto.description,
           address: dto.address,
+          latitude: dto.latitude,
+          longitude: dto.longitude,
           cuisineType: dto.cuisineType,
           imageUrl: dto.imageUrl,
         })

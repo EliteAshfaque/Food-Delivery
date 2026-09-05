@@ -105,6 +105,18 @@ export class OrdersService {
 
     this.validateTransition(order.status, newStatus, user.role);
 
+    if (
+      user.role === UserRole.RESTAURANT_OWNER &&
+      newStatus === OrderStatus.READY
+    ) {
+      const { available } = await this.driverService.getAvailability();
+      if (!available) {
+        throw new BadRequestException(
+          'No delivery driver is available. Keep the order preparing and try again shortly.',
+        );
+      }
+    }
+
     const [updated] = await this.db
       .update(schema.orders)
       .set({
@@ -132,6 +144,10 @@ export class OrdersService {
     return this.findOrdersWithDetails(
       eq(schema.orders.restaurantId, restaurantId),
     );
+  }
+
+  async getDriverAvailability() {
+    return this.driverService.getAvailability();
   }
 
   /** Owner helper: resolve restaurant from owner, then return enriched orders. */

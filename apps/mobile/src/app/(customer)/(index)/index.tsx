@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -21,8 +21,12 @@ import { brand } from "@/constants/brand";
 import { WasilLogo } from "@/components/wasil-brand";
 import { WasilImage } from "@/components/wasil-image";
 import { AppIcon, type FoodIconName } from "@/components/wasil-icon-system";
+import { LocationPicker } from "@/components/location-picker";
+import { useAuth } from "@/context/auth-context";
 import { CategoryTile } from "@/components/wasil-ui-components";
 import type { Restaurant } from "@food-delivery/types";
+import { distanceInKm, getCurrentCoordinates, type Coordinates } from "@/lib/location";
+import * as SecureStore from "expo-secure-store";
 
 const CUISINE_FILTERS = [
   "All",
@@ -52,14 +56,19 @@ function formatRating(rating: number | string) {
   return value.toFixed(1);
 }
 
-// Placeholder until customer location + restaurant coordinates are wired up.
-function getPlaceholderDistance(restaurantId: string) {
-  let hash = 0;
-  for (let i = 0; i < restaurantId.length; i += 1) {
-    hash = (hash + restaurantId.charCodeAt(i)) % 100;
+function getDistance(customer: Coordinates | null, restaurant: Restaurant) {
+  if (
+    !customer ||
+    restaurant.latitude == null ||
+    restaurant.longitude == null
+  ) {
+    return "Distance unavailable";
   }
-  const km = ((hash % 40) / 10 + 1.5).toFixed(1);
-  return `${km} km`;
+
+  return `${distanceInKm(customer, {
+    latitude: restaurant.latitude,
+    longitude: restaurant.longitude,
+  }).toFixed(1)} km`;
 }
 
 // Placeholder until real delivery ETA is calculated.
@@ -72,10 +81,19 @@ function getPlaceholderDeliveryTime(restaurantId: string) {
   return `${min}-${min + 10} min`;
 }
 
+function locationPromptKey(userId: string) {
+  return `customer-location-prompted-${userId}`;
+}
+
 export default function CustomerHomeScreen() {
+  const { user } = useAuth();
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("All");
   const [hasPlayedEntrance, setHasPlayedEntrance] = useState(false);
+  const [customerLocation, setCustomerLocation] = useState<Coordinates | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [isMapPickerVisible, setMapPickerVisible] = useState(false);
+  const locationPromptStarted = useRef(false);
   const reduceMotion = useReducedMotion();
   const debouncedSearch = useDebounce(search, 400);
 
@@ -105,6 +123,31 @@ export default function CustomerHomeScreen() {
     return () => clearTimeout(settled);
   }, [hasPlayedEntrance, restaurants.length]);
 
+  useEffect(() => {
+    if (!user || locationPromptStarted.current) return;
+
+    let cancelled = false;
+    const promptKey = locationPromptKey(user.id);
+
+    void (async () => {
+      const alreadyPrompted = await SecureStore.getItemAsync(promptKey).catch(
+        () => null,
+      );
+      if (alreadyPrompted || cancelled) return;
+
+      locationPromptStarted.current = true;
+      const coordinates = await getCurrentCoordinates().catch(() => null);
+      if (cancelled) return;
+
+      if (coordinates) setCustomerLocation(coordinates);
+      setMapPickerVisible(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   const homeEntrance = (delay: number, duration = 320) =>
     hasPlayedEntrance || reduceMotion
       ? undefined
@@ -126,6 +169,34 @@ export default function CustomerHomeScreen() {
     });
   }
 
+  async function chooseLocation() {
+    setIsLocating(true);
+    try {
+      const coords = await getCurrentCoordinates();
+      if (!coords) {
+        alert("Location is optional. Allow it only if you want to see restaurant distance.");
+        return;
+      }
+      setCustomerLocation(coords);
+      setMapPickerVisible(true);
+    } catch {
+      alert("We couldn't get your location. You can still browse and enter a delivery address at checkout.");
+    } finally {
+      setIsLocating(false);
+    }
+  }
+
+  function completeLocationSelection(coordinates?: Coordinates) {
+    if (coordinates) setCustomerLocation(coordinates);
+    setMapPickerVisible(false);
+    if (user) {
+      void SecureStore.setItemAsync(
+        locationPromptKey(user.id),
+        "true",
+      ).catch(() => undefined);
+    }
+  }
+
   return (
     <View style={styles.container}>
       <FlatList
@@ -138,7 +209,13 @@ export default function CustomerHomeScreen() {
             <Animated.View entering={homeEntrance(30, 280)}>
               <View style={styles.topBar}>
                 <WasilLogo size={38} />
-                <View style={styles.deliveryLocation}>
+                <Pressable
+                  style={styles.deliveryLocation}
+                  onPress={() => void chooseLocation()}
+                  disabled={isLocating}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose location for restaurant distances"
+                >
                   <AppIcon
                     name="location"
                     size="sm"
@@ -146,9 +223,15 @@ export default function CustomerHomeScreen() {
                   />
                   <View>
                     <Text style={styles.deliveryOverline}>DELIVERING TO</Text>
-                    <Text style={styles.deliveryLabel}>Your saved address</Text>
+                    <Text style={styles.deliveryLabel}>
+                      {isLocating
+                        ? "Finding location…"
+                        : customerLocation
+                          ? "Current location"
+                          : "Set location"}
+                    </Text>
                   </View>
-                </View>
+                </Pressable>
               </View>
             </Animated.View>
 
@@ -333,7 +416,7 @@ export default function CustomerHomeScreen() {
                       color={brand.colors.light.inkMuted}
                     />
                     <Text style={styles.metaText}>
-                      {getPlaceholderDistance(item.id)}
+                      {getDistance(customerLocation, item)}
                     </Text>
                   </View>
                   <Text style={styles.dot}>•</Text>
@@ -386,6 +469,13 @@ export default function CustomerHomeScreen() {
             </View>
           )
         }
+      />
+      <LocationPicker
+        initialCoordinates={customerLocation}
+        onClose={() => completeLocationSelection()}
+        onConfirm={(coordinates) => completeLocationSelection(coordinates)}
+        title="Choose your delivery area"
+        visible={isMapPickerVisible}
       />
     </View>
   );

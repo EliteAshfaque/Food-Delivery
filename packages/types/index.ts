@@ -34,6 +34,8 @@ export interface  Restaurant{
     description:string|null;
     imageUrl:string|null;
     address:string;
+    latitude: number | null;
+    longitude: number | null;
     isOpen:boolean;
     cuisineType:string;
     rating: number | string;

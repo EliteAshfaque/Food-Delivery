@@ -4,4 +4,6 @@ export type OrderTrackingMapProps = {
   delivery: Coordinates;
   driver?: Coordinates | null;
   live?: boolean;
+  destinationTitle?: string;
+  destinationDescription?: string;
 };

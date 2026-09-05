@@ -25,7 +25,16 @@ function loadDotEnv() {
 loadDotEnv();
 
 export default ({ config }: ConfigContext): ExpoConfig => {
-  const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+  // Native map keys are intentionally platform-specific. Keep the existing
+  // public key as a temporary fallback while each platform gets its own key.
+  const googleMapsAndroidApiKey =
+    process.env.GOOGLE_MAPS_ANDROID_API_KEY ??
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ??
+    '';
+  const googleMapsIosApiKey =
+    process.env.GOOGLE_MAPS_IOS_API_KEY ??
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ??
+    '';
 
   return {
     ...config,
@@ -39,10 +48,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ios: {
       icon: './assets/images/wasil-icon.png',
       config: {
-        googleMapsApiKey,
+        googleMapsApiKey: googleMapsIosApiKey,
       },
     },
     android: {
+      package: 'com.wasil.fooddelivery',
       usesCleartextTraffic: true,
       adaptiveIcon: {
         backgroundColor: '#25192A',
@@ -51,7 +61,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       predictiveBackGestureEnabled: false,
       config: {
         googleMaps: {
-          apiKey: googleMapsApiKey,
+          apiKey: googleMapsAndroidApiKey,
         },
       },
     },
@@ -83,6 +93,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
             'Allow Wasil to use your location for delivery tracking.',
           locationAlwaysAndWhenInUsePermission:
             'Allow Wasil to track your location in the background while delivering.',
+        },
+      ],
+      [
+        'react-native-maps',
+        {
+          androidGoogleMapsApiKey: googleMapsAndroidApiKey,
+          iosGoogleMapsApiKey: googleMapsIosApiKey,
         },
       ],
     ],
