@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import Animated, {
@@ -17,6 +18,8 @@ import Animated, {
 
 import { WasilLogo, WasilMark } from '@/components/wasil-brand';
 import { CustomerReviewsList } from '@/components/customer-reviews-list';
+import { EditProfileModal } from '@/components/edit-profile-modal';
+import { ProfileAvatar } from '@/components/profile-avatar';
 import { AppIcon, type AppIconName } from '@/components/wasil-icon-system';
 import { RequestErrorState } from '@/components/request-error-state';
 import { brand } from '@/constants/brand';
@@ -78,12 +81,9 @@ function ActionRow({ detail, icon, label, onPress }: ActionRowProps) {
   );
 }
 
-function getInitials(firstName: string, lastName: string) {
-  return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase() || 'W';
-}
-
 export default function OwnerProfileScreen() {
   const { user, logout } = useAuth();
+  const [editOpen, setEditOpen] = useState(false);
   const queryClient = useQueryClient();
   const reduceMotion = useReducedMotion();
   const enter = (delay: number, duration = 340) =>
@@ -161,11 +161,13 @@ export default function OwnerProfileScreen() {
           <View style={styles.identityCard}>
             <View style={styles.identityGlow} />
             <View style={styles.identityTopRow}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>
-                  {getInitials(user.firstName, user.lastName)}
-                </Text>
-              </View>
+              <ProfileAvatar
+                firstName={user.firstName}
+                imageUrl={user.imageUrl}
+                lastName={user.lastName}
+                size={56}
+                style={styles.avatar}
+              />
               <View style={styles.memberPill}>
                 <AppIcon
                   color={brand.colors.light.accent}
@@ -196,6 +198,21 @@ export default function OwnerProfileScreen() {
                   : 'Set up your restaurant to get started'}
               </Text>
             </View>
+            <Pressable
+              accessibilityLabel="Edit profile"
+              accessibilityRole="button"
+              onPress={() => setEditOpen(true)}
+              style={({ pressed }) => [
+                styles.editProfileButton,
+                pressed && styles.editProfilePressed,
+              ]}>
+              <AppIcon
+                color={brand.colors.light.ink}
+                name="personalInformation"
+                size="xs"
+              />
+              <Text style={styles.editProfileText}>Edit profile</Text>
+            </Pressable>
           </View>
         </Animated.View>
 
@@ -361,21 +378,34 @@ export default function OwnerProfileScreen() {
           </View>
           <View style={styles.accountCard}>
             <ActionRow
+              icon="personalInformation"
+              label="Personal information"
+              detail={`${fullName} · tap to edit`}
+              onPress={() => setEditOpen(true)}
+            />
+            <View style={styles.divider} />
+            <ActionRow
               icon="email"
               label="Email"
               detail={user.email}
             />
             <View style={styles.divider} />
             <ActionRow
-              icon="personalInformation"
+              icon="privacy"
               label="Account type"
               detail="Restaurant owner"
             />
             <View style={styles.divider} />
             <ActionRow
-              icon="privacy"
-              label="Session"
-              detail="Signed in securely"
+              icon="helpSupport"
+              label="Help & support"
+              detail="Get assistance"
+              onPress={() =>
+                Alert.alert(
+                  'Help & support',
+                  'For kitchen or order issues, use Live orders. You can also email support@wasil.app.',
+                )
+              }
             />
           </View>
         </Animated.View>
@@ -424,6 +454,11 @@ export default function OwnerProfileScreen() {
           </View>
         </Animated.View>
       </ScrollView>
+
+      <EditProfileModal
+        onClose={() => setEditOpen(false)}
+        visible={editOpen}
+      />
     </View>
   );
 }
@@ -502,17 +537,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   avatar: {
-    alignItems: 'center',
-    backgroundColor: '#FFF8F4',
-    borderRadius: 24,
-    height: 48,
-    justifyContent: 'center',
-    width: 48,
-  },
-  avatarText: {
-    color: brand.colors.light.primary,
-    fontSize: 16,
-    fontWeight: '900',
+    borderColor: 'rgba(255, 248, 244, 0.35)',
+    borderWidth: 3,
   },
   memberPill: {
     alignItems: 'center',
@@ -562,6 +588,26 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     fontWeight: '700',
+  },
+  editProfileButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: brand.colors.light.accent,
+    borderRadius: brand.radius.pill,
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  editProfilePressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.98 }],
+  },
+  editProfileText: {
+    color: brand.colors.light.ink,
+    fontSize: 13,
+    fontWeight: '900',
   },
   sectionHeader: {
     alignItems: 'baseline',

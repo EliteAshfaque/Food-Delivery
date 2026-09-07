@@ -450,52 +450,53 @@ export default function CustomerHomeScreen() {
                   style={styles.cardImage}
                   uri={item.imageUrl}
                 />
+                <View
+                  style={[
+                    styles.cardStatusPill,
+                    item.isOpen ? styles.statusOpen : styles.statusClosed,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusText,
+                      item.isOpen
+                        ? styles.statusTextOpen
+                        : styles.statusTextClosed,
+                    ]}
+                  >
+                    {item.isOpen ? "Open" : "Closed"}
+                  </Text>
+                </View>
+                <View style={styles.cardRatingBadge}>
+                  <AppIcon
+                    color={brand.colors.light.accent}
+                    name="rating"
+                    size="xs"
+                  />
+                  <Text style={styles.cardRatingText}>
+                    {formatRating(item.rating)}
+                  </Text>
+                </View>
               </View>
 
               <View style={styles.cardBody}>
-                <View style={styles.cardTopRow}>
-                  <Text style={styles.cardName} numberOfLines={1}>
-                    {displayText(item.name, "Local kitchen")}
-                  </Text>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      item.isOpen ? styles.statusOpen : styles.statusClosed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.statusText,
-                        item.isOpen
-                          ? styles.statusTextOpen
-                          : styles.statusTextClosed,
-                      ]}
-                    >
-                      {item.isOpen ? "Open" : "Closed"}
-                    </Text>
-                  </View>
-                </View>
-
-                <Text style={styles.cardCuisine}>
-                  {displayText(item.cuisineType, "Open kitchen")}
+                <Text style={styles.cardName} numberOfLines={1}>
+                  {displayText(item.name, "Local kitchen")}
                 </Text>
-                <Text style={styles.cardAddress} numberOfLines={1}>
-                  {displayText(item.address, "Delivery available")}
+                <Text style={styles.cardCuisine} numberOfLines={1}>
+                  {displayText(item.cuisineType, "Open kitchen")}
                 </Text>
 
                 <View style={styles.metaRow}>
-                  <View style={styles.metaItem}>
+                  <View style={styles.metaChip}>
                     <AppIcon
-                      name="rating"
+                      name="deliveryTime"
                       size="xs"
-                      color={brand.colors.light.accent}
+                      color={brand.colors.light.primary}
                     />
-                    <Text style={styles.metaText}>
-                      {formatRating(item.rating)}
-                    </Text>
+                    <Text style={styles.metaText}>{DELIVERY_TIME_LABEL}</Text>
                   </View>
-                  <Text style={styles.dot}>•</Text>
-                  <View style={styles.metaItem}>
+                  <View style={styles.metaChip}>
                     <AppIcon
                       name="distance"
                       size="xs"
@@ -505,26 +506,6 @@ export default function CustomerHomeScreen() {
                       {getDistance(customerLocation, item)}
                     </Text>
                   </View>
-                  <Text style={styles.dot}>•</Text>
-                  <View style={styles.metaItem}>
-                    <AppIcon
-                      name="deliveryTime"
-                      size="xs"
-                      color={brand.colors.light.inkMuted}
-                    />
-                    <Text style={styles.metaText}>
-                      {DELIVERY_TIME_LABEL}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.recommendationRow}>
-                  <AppIcon
-                    name="recommended"
-                    size="xs"
-                    color={brand.colors.light.mint}
-                  />
-                  <Text style={styles.freeDelivery}>A top local pick</Text>
                 </View>
               </View>
             </Pressable>
@@ -808,7 +789,9 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 16,
-    paddingBottom: 24,
+    // Modest scroll room under the last card. Android NativeTabs already
+    // insets the screen for the tab bar — do not add BottomTabInset again.
+    paddingBottom: 36,
     flexGrow: 1,
   },
   centered: {
@@ -843,89 +826,92 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   card: {
-    borderRadius: brand.radius.large,
     backgroundColor: brand.colors.light.surface,
-    borderColor: brand.colors.light.border,
-    borderWidth: 1,
-    marginBottom: 16,
+    borderRadius: 22,
+    marginBottom: 18,
     overflow: "hidden",
     ...brand.shadow,
   },
   cardPressed: {
     opacity: 0.96,
-    transform: [{ scale: 0.99 }],
+    transform: [{ scale: 0.985 }],
   },
   cardImageWrap: {
+    aspectRatio: 16 / 10,
+    backgroundColor: brand.colors.light.surfaceMuted,
+    overflow: "hidden",
     position: "relative",
-  },
-  cardImage: {
-    height: 174,
     width: "100%",
   },
+  cardImage: {
+    height: "100%",
+    width: "100%",
+  },
+  cardStatusPill: {
+    borderRadius: brand.radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    position: "absolute",
+    right: 12,
+    top: 12,
+  },
+  cardRatingBadge: {
+    alignItems: "center",
+    backgroundColor: "rgba(37,25,42,0.88)",
+    borderRadius: brand.radius.pill,
+    bottom: 12,
+    flexDirection: "row",
+    gap: 4,
+    left: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    position: "absolute",
+  },
+  cardRatingText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "900",
+  },
   cardBody: {
-    backgroundColor: brand.colors.light.surface,
-    elevation: 1,
-    padding: 14,
-    position: "relative",
-    zIndex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
   },
   metaRow: {
-    flexDirection: "row",
     alignItems: "center",
+    flexDirection: "row",
     flexWrap: "wrap",
-    marginTop: 4,
-    marginBottom: 8,
+    gap: 8,
+    marginTop: 10,
   },
-  metaItem: {
-    flexDirection: "row",
+  metaChip: {
     alignItems: "center",
-    gap: 4,
-  },
-  metaIcon: {
-    fontSize: 12,
+    backgroundColor: brand.colors.light.canvas,
+    borderRadius: brand.radius.pill,
+    flexDirection: "row",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   metaText: {
-    fontSize: 13,
     color: brand.colors.light.inkMuted,
-    fontWeight: "700",
-  },
-  recommendationRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 4,
-  },
-  freeDelivery: {
     fontSize: 12,
-    color: brand.colors.light.mint,
     fontWeight: "800",
   },
-  cardTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-    marginBottom: 4,
-  },
   cardName: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: "900",
     color: brand.colors.light.ink,
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    fontSize: 18,
+    fontWeight: "900",
+    letterSpacing: -0.3,
   },
   statusOpen: {
-    backgroundColor: "#E4F6F0",
+    backgroundColor: "rgba(228,246,240,0.96)",
   },
   statusClosed: {
-    backgroundColor: "#FDECEE",
+    backgroundColor: "rgba(253,236,238,0.96)",
   },
   statusText: {
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   statusTextOpen: {
     color: brand.colors.light.mint,
@@ -934,19 +920,9 @@ const styles = StyleSheet.create({
     color: brand.colors.light.danger,
   },
   cardCuisine: {
-    fontSize: 13,
-    color: brand.colors.light.primaryText,
-    fontWeight: "800",
-    marginBottom: 4,
-  },
-  cardAddress: {
-    fontSize: 13,
     color: brand.colors.light.inkMuted,
-    marginBottom: 8,
-  },
-  dot: {
-    marginHorizontal: 6,
-    color: brand.colors.light.border,
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: "700",
+    marginTop: 3,
   },
 });

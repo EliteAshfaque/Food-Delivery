@@ -1,11 +1,15 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
+import { router } from "expo-router";
 import Animated, {
   FadeInDown,
   useReducedMotion,
 } from "react-native-reanimated";
 
 import { CustomerReviewsList } from "@/components/customer-reviews-list";
+import { EditProfileModal } from "@/components/edit-profile-modal";
+import { ProfileAvatar } from "@/components/profile-avatar";
 import { RequestErrorState } from "@/components/request-error-state";
 import { WasilLogo } from "@/components/wasil-brand";
 import { AppIcon, type AppIconName } from "@/components/wasil-icon-system";
@@ -19,11 +23,12 @@ type AccountRowProps = {
   icon: AppIconName;
   label: string;
   value: string;
+  onPress?: () => void;
 };
 
-function AccountRow({ icon, label, value }: AccountRowProps) {
-  return (
-    <View style={styles.accountRow}>
+function AccountRow({ icon, label, value, onPress }: AccountRowProps) {
+  const content = (
+    <>
       <View style={styles.accountIcon}>
         <AppIcon color={brand.colors.light.primary} name={icon} size="sm" />
       </View>
@@ -33,16 +38,37 @@ function AccountRow({ icon, label, value }: AccountRowProps) {
           {value}
         </Text>
       </View>
-    </View>
+      {onPress ? (
+        <AppIcon
+          color={brand.colors.light.inkMuted}
+          name="navigation"
+          size="sm"
+        />
+      ) : null}
+    </>
   );
-}
 
-function getInitials(firstName: string, lastName: string) {
-  return `${firstName.slice(0, 1)}${lastName.slice(0, 1)}`.toUpperCase() || "W";
+  if (!onPress) {
+    return <View style={styles.accountRow}>{content}</View>;
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.accountRow,
+        pressed && styles.accountRowPressed,
+      ]}
+    >
+      {content}
+    </Pressable>
+  );
 }
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
+  const [editOpen, setEditOpen] = useState(false);
   const reduceMotion = useReducedMotion();
   const enter = (delay: number, duration = 340) =>
     reduceMotion ? undefined : FadeInDown.duration(duration).delay(delay);
@@ -73,7 +99,6 @@ export default function ProfileScreen() {
   if (!user) return null;
 
   const name = `${user.firstName} ${user.lastName}`.trim() || "Wasil driver";
-  const initials = getInitials(user.firstName, user.lastName);
 
   return (
     <View style={styles.container}>
@@ -95,9 +120,13 @@ export default function ProfileScreen() {
 
         <Animated.View entering={enter(80, 320)}>
           <View style={styles.identityCard}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{initials}</Text>
-            </View>
+            <ProfileAvatar
+              firstName={user.firstName}
+              imageUrl={user.imageUrl}
+              lastName={user.lastName}
+              size={76}
+              style={styles.avatar}
+            />
             <Text style={styles.name}>{name}</Text>
             <Text style={styles.email}>{user.email}</Text>
             <View style={styles.rolePill}>
@@ -118,6 +147,22 @@ export default function ProfileScreen() {
                 </Text>
               </View>
             ) : null}
+            <Pressable
+              accessibilityLabel="Edit profile"
+              accessibilityRole="button"
+              onPress={() => setEditOpen(true)}
+              style={({ pressed }) => [
+                styles.editProfileButton,
+                pressed && styles.editProfilePressed,
+              ]}
+            >
+              <AppIcon
+                color={brand.colors.light.ink}
+                name="personalInformation"
+                size="xs"
+              />
+              <Text style={styles.editProfileText}>Edit profile</Text>
+            </Pressable>
           </View>
         </Animated.View>
 
@@ -141,18 +186,38 @@ export default function ProfileScreen() {
         <Animated.View entering={enter(200, 380)}>
           <Text style={styles.sectionLabel}>ACCOUNT</Text>
           <View style={styles.accountCard}>
+            <AccountRow
+              icon="personalInformation"
+              label="Personal information"
+              onPress={() => setEditOpen(true)}
+              value={`${name} · tap to edit`}
+            />
+            <View style={styles.rule} />
             <AccountRow icon="email" label="Email address" value={user.email} />
             <View style={styles.rule} />
             <AccountRow
-              icon="personalInformation"
+              icon="notifications"
+              label="Notifications"
+              onPress={() => router.push("/(driver)/notifications")}
+              value="Delivery and account updates"
+            />
+            <View style={styles.rule} />
+            <AccountRow
+              icon="lock"
               label="Account type"
               value="Delivery partner"
             />
             <View style={styles.rule} />
             <AccountRow
-              icon="lock"
-              label="Session"
-              value="Signed in securely"
+              icon="helpSupport"
+              label="Help & support"
+              onPress={() =>
+                Alert.alert(
+                  "Help & support",
+                  "For delivery issues, open the active task screen. You can also email support@wasil.app.",
+                )
+              }
+              value="Get assistance"
             />
           </View>
         </Animated.View>
@@ -195,6 +260,11 @@ export default function ProfileScreen() {
           </Pressable>
         </Animated.View>
       </ScrollView>
+
+      <EditProfileModal
+        onClose={() => setEditOpen(false)}
+        visible={editOpen}
+      />
     </View>
   );
 }
@@ -240,20 +310,8 @@ const styles = StyleSheet.create({
     ...brand.shadow,
   },
   avatar: {
-    alignItems: "center",
-    backgroundColor: brand.colors.light.primary,
     borderColor: "rgba(255,248,244,0.3)",
-    borderRadius: 38,
     borderWidth: 4,
-    height: 76,
-    justifyContent: "center",
-    width: 76,
-  },
-  avatarText: {
-    color: "#FFF8F4",
-    fontSize: 25,
-    fontWeight: "900",
-    letterSpacing: -0.5,
   },
   name: {
     color: "#FFF8F4",
@@ -280,6 +338,25 @@ const styles = StyleSheet.create({
     marginTop: 17,
     paddingHorizontal: 11,
     paddingVertical: 8,
+  },
+  editProfileButton: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.accent,
+    borderRadius: brand.radius.pill,
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  editProfilePressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.98 }],
+  },
+  editProfileText: {
+    color: brand.colors.light.ink,
+    fontSize: 13,
+    fontWeight: "900",
   },
   roleDot: {
     backgroundColor: brand.colors.light.accent,
@@ -327,6 +404,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     minHeight: 73,
     paddingHorizontal: 15,
+  },
+  accountRowPressed: {
+    backgroundColor: brand.colors.light.canvas,
+    opacity: 0.92,
   },
   accountIcon: {
     alignItems: "center",

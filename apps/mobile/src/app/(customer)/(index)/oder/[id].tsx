@@ -2,21 +2,22 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import Animated, {
   Easing,
-  type SharedValue,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
-  withSpring,
+  withRepeat,
   withTiming,
 } from "react-native-reanimated";
 import { api } from "@/lib/axios";
@@ -25,6 +26,7 @@ import { formatCurrency } from "@/lib/format";
 import { usePaymentSheet } from "@/hooks/use-payment-sheet";
 import { useOrderSocket, useDriverLocation } from "@/hooks/user-order.socket";
 import { OrderTrackingMap } from "@/components/order-tracking-map";
+import { OrderStepMotion } from "@/components/order-step-motion";
 import { RequestErrorState } from "@/components/request-error-state";
 import {
   OrderStatus,
@@ -37,7 +39,6 @@ import { brand } from "@/constants/brand";
 import { PaymentSuccessCelebration } from "@/components/payment-success-celebration";
 import { AppIcon, type AppIconName } from "@/components/wasil-icon-system";
 import { OrderReviewCard } from "@/components/order-review-card";
-import { OrderStatusChip } from "@/components/wasil-ui-components";
 
 type OrderLineItem = {
   id: string;
@@ -52,6 +53,8 @@ type OrderDetail = {
   restaurantId: string;
   driverId: string | null;
   status: OrderStatusType;
+  subtotalAmount?: string;
+  discountAmount?: string;
   totalAmount: string;
   deliveryAddress: string;
   deliveryLatitude: number | null;
@@ -77,46 +80,51 @@ const STATUS_STEPS: {
   icon: AppIconName;
   key: OrderStatusType;
   label: string;
+  shortLabel: string;
 }[] = [
   {
     key: OrderStatus.PENDING,
     label: "Payment pending",
+    shortLabel: "Pay",
     detail: "Complete secure payment to place your order",
     icon: "creditCard",
   },
   {
     key: OrderStatus.CONFIRMED,
-    label: "Restaurant confirmed",
-    detail: "Your order has reached the kitchen",
+    label: "Order confirmed",
+    shortLabel: "Confirmed",
+    detail: "Your order has reached the restaurant",
     icon: "orderConfirmed",
   },
   {
     key: OrderStatus.PREPARING,
     label: "Preparing your order",
+    shortLabel: "Kitchen",
     detail: "The kitchen is preparing your food",
     icon: "orderPreparing",
   },
   {
     key: OrderStatus.READY,
-    label: "Ready for driver pickup",
+    label: "Ready for pickup",
+    shortLabel: "Ready",
     detail: "A driver can collect your order now",
     icon: "orderReady",
   },
   {
     key: OrderStatus.PICKED_UP,
-    label: "Driver is on the way",
+    label: "On the way",
+    shortLabel: "En route",
     detail: "Your driver is heading to your address",
     icon: "orderPickedUp",
   },
   {
     key: OrderStatus.DELIVERED,
     label: "Delivered",
+    shortLabel: "Done",
     detail: "Your order has arrived — enjoy your meal",
     icon: "orderCompleted",
   },
 ];
-
-const PROGRESS_CONNECTOR_HEIGHT = 46;
 
 function getStatusIndex(status: OrderStatusType) {
   if (status === "CANCELLED") return -1;
@@ -135,22 +143,22 @@ function getHeaderContent(status: OrderStatusType) {
     case "CONFIRMED":
       return {
         icon: "orderConfirmed" as const,
-        title: "Payment confirmed",
-        subtitle: "Your order has been sent to the restaurant",
+        title: "Order confirmed",
+        subtitle: "The restaurant has your order",
         tone: brand.colors.light.primary,
       };
     case "PREPARING":
       return {
         icon: "orderPreparing" as const,
         title: "Preparing your food",
-        subtitle: "The restaurant is working on your order",
+        subtitle: "The kitchen is working on it now",
         tone: brand.colors.light.warning,
       };
     case "READY":
       return {
         icon: "orderReady" as const,
-        title: "Order is ready",
-        subtitle: "Waiting for driver pickup",
+        title: "Ready for pickup",
+        subtitle: "Waiting for your driver",
         tone: brand.colors.light.mint,
       };
     case "PICKED_UP":
@@ -164,14 +172,14 @@ function getHeaderContent(status: OrderStatusType) {
       return {
         icon: "orderCompleted" as const,
         title: "Delivered",
-        subtitle: "Enjoy your meal!",
+        subtitle: "Enjoy your meal",
         tone: brand.colors.light.mint,
       };
     case "CANCELLED":
       return {
         icon: "orderFailed" as const,
         title: "Order cancelled",
-        subtitle: "This order was cancelled",
+        subtitle: "This order will not continue",
         tone: brand.colors.light.danger,
       };
     default:
@@ -184,150 +192,72 @@ function getHeaderContent(status: OrderStatusType) {
   }
 }
 
-function OrderProgressConnector({
-  index,
-  progress,
-}: {
-  index: number;
-  progress: SharedValue<number>;
-}) {
-  const fillStyle = useAnimatedStyle(() => {
-    const fill = Math.max(0, Math.min(progress.value - index, 1));
-
-    return {
-      opacity: fill,
-      transform: [{ translateY: -(1 - fill) * PROGRESS_CONNECTOR_HEIGHT }],
-    };
-  });
-
-  return (
-    <View style={styles.progressConnector}>
-      <Animated.View style={[styles.progressConnectorFill, fillStyle]} />
-    </View>
-  );
-}
-
-function OrderProgressStep({
-  currentStep,
-  index,
-  progress,
-  reduceMotion,
-  step,
+function TrackNode({
+  active,
+  done,
+  label,
   tone,
+  icon,
 }: {
-  currentStep: number;
-  index: number;
-  progress: SharedValue<number>;
-  reduceMotion: boolean;
-  step: (typeof STATUS_STEPS)[number];
+  active: boolean;
+  done: boolean;
+  label: string;
   tone: string;
+  icon: AppIconName;
 }) {
-  const active = currentStep === index;
-  const done = currentStep > index;
-  const iconScale = useSharedValue(1);
-  const haloProgress = useSharedValue(1);
+  const reduceMotion = useReducedMotion();
+  const pulse = useSharedValue(1);
 
   useEffect(() => {
     if (!active || reduceMotion) {
-      iconScale.value = 1;
-      haloProgress.value = 1;
+      pulse.value = 1;
       return;
     }
+    pulse.value = withRepeat(
+      withTiming(1.14, { duration: 700, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
+    );
+  }, [active, pulse, reduceMotion]);
 
-    iconScale.value = 0.78;
-    haloProgress.value = 0;
-    iconScale.value = withSpring(1, {
-      damping: 13,
-      mass: 0.72,
-      stiffness: 235,
-    });
-    haloProgress.value = withTiming(1, {
-      duration: 640,
-      easing: Easing.out(Easing.cubic),
-    });
-  }, [active, haloProgress, iconScale, reduceMotion]);
-
-  const iconStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: iconScale.value }],
+  const dotStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: active ? pulse.value : 1 }],
   }));
-  const haloStyle = useAnimatedStyle(() => ({
-    opacity: (1 - haloProgress.value) * 0.28,
-    transform: [{ scale: 0.9 + haloProgress.value * 0.66 }],
-  }));
-
-  const isLast = index === STATUS_STEPS.length - 1;
-  const stateDescription = active
-    ? "Current stage"
-    : done
-      ? "Completed"
-      : "Upcoming";
 
   return (
-    <View
-      accessible
-      accessibilityLabel={`${stateDescription}: ${step.label}. ${step.detail}`}
-      style={[styles.progressStep, isLast && styles.progressStepLast]}
-    >
-      <View style={styles.progressRail}>
-        {active && !reduceMotion ? (
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.progressStepHalo,
-              { backgroundColor: tone },
-              haloStyle,
-            ]}
-          />
-        ) : null}
-        <Animated.View
-          style={[
-            styles.progressStepIcon,
-            done && styles.progressStepIconDone,
-            active && [
-              styles.progressStepIconActive,
-              { backgroundColor: tone },
-            ],
-            !active && !done && styles.progressStepIconUpcoming,
-            iconStyle,
-          ]}
-        >
+    <View style={styles.trackNode}>
+      <Animated.View
+        style={[
+          styles.trackDot,
+          done && styles.trackDotDone,
+          active && [
+            styles.trackDotActive,
+            {
+              backgroundColor: tone,
+              borderColor: tone,
+            },
+          ],
+          dotStyle,
+        ]}
+      >
+        {done || active ? (
           <AppIcon
-            color={
-              active
-                ? "#FFFFFF"
-                : done
-                  ? brand.colors.light.mint
-                  : brand.colors.light.inkMuted
-            }
-            name={done ? "check" : step.icon}
-            size="sm"
+            color="#FFFFFF"
+            name={done ? "check" : icon}
+            size="xs"
           />
-        </Animated.View>
-        {!isLast ? (
-          <OrderProgressConnector index={index} progress={progress} />
         ) : null}
-      </View>
-
-      <View style={styles.progressStepCopy}>
-        <Text
-          style={[
-            styles.progressStepLabel,
-            done && styles.progressStepLabelDone,
-            active && { color: tone },
-          ]}
-        >
-          {step.label}
-        </Text>
-        <Text style={styles.progressStepDetail}>{step.detail}</Text>
-        {active ? (
-          <View style={styles.currentStage}>
-            <View style={[styles.currentStageDot, { backgroundColor: tone }]} />
-            <Text style={[styles.currentStageText, { color: tone }]}>
-              Live now
-            </Text>
-          </View>
-        ) : null}
-      </View>
+      </Animated.View>
+      <Text
+        numberOfLines={1}
+        style={[
+          styles.trackLabel,
+          (done || active) && styles.trackLabelActive,
+          active && { color: tone },
+        ]}
+      >
+        {label}
+      </Text>
     </View>
   );
 }
@@ -335,39 +265,57 @@ function OrderProgressStep({
 function OrderProgressStepper({ status }: { status: OrderStatusType }) {
   const reduceMotion = useReducedMotion();
   const currentStep = getStatusIndex(status);
-  const progress = useSharedValue(reduceMotion ? currentStep : -0.25);
   const header = getHeaderContent(status);
+  const activeStep =
+    currentStep >= 0 ? STATUS_STEPS[currentStep] : STATUS_STEPS[0];
+  const progress = useSharedValue(0);
+  const livePulse = useSharedValue(1);
 
   useEffect(() => {
-    if (currentStep < 0) return;
-
+    const max = Math.max(STATUS_STEPS.length - 1, 1);
+    const next = Math.max(0, Math.min(currentStep / max, 1));
     progress.value = reduceMotion
-      ? currentStep
-      : withTiming(currentStep, {
-          duration: 680,
+      ? next
+      : withTiming(next, {
+          duration: 650,
           easing: Easing.out(Easing.cubic),
         });
   }, [currentStep, progress, reduceMotion]);
 
+  useEffect(() => {
+    if (status === OrderStatus.DELIVERED || reduceMotion) {
+      livePulse.value = 1;
+      return;
+    }
+    livePulse.value = withRepeat(
+      withTiming(0.35, { duration: 800, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
+    );
+  }, [livePulse, reduceMotion, status]);
+
+  const fillStyle = useAnimatedStyle(() => ({
+    width: `${Math.max(progress.value, 0) * 100}%`,
+  }));
+
+  const liveDotStyle = useAnimatedStyle(() => ({
+    opacity: livePulse.value,
+  }));
+
   if (status === OrderStatus.CANCELLED) {
     return (
-      <View
-        accessible
-        accessibilityLabel="Order cancelled. This order will not continue."
-        style={styles.timelineCard}
-      >
-        <Text style={styles.timelineTitle}>Order journey</Text>
-        <View style={styles.cancelledJourney}>
-          <View style={styles.cancelledJourneyIcon}>
+      <View style={styles.trackCard}>
+        <View style={styles.cancelledBanner}>
+          <View style={styles.cancelledIcon}>
             <AppIcon
               color={brand.colors.light.danger}
               name="orderFailed"
               size="md"
             />
           </View>
-          <View style={styles.cancelledJourneyCopy}>
-            <Text style={styles.cancelledJourneyTitle}>Order cancelled</Text>
-            <Text style={styles.cancelledJourneyText}>
+          <View style={styles.cancelledCopy}>
+            <Text style={styles.cancelledTitle}>Order cancelled</Text>
+            <Text style={styles.cancelledText}>
               This order will not continue. Check your payment activity for any
               related updates.
             </Text>
@@ -377,42 +325,68 @@ function OrderProgressStepper({ status }: { status: OrderStatusType }) {
     );
   }
 
-  const currentLabel = STATUS_STEPS[currentStep]?.label ?? "Order updates";
-
   return (
     <View
       accessible
-      accessibilityLabel={`Order progress: ${currentLabel}, step ${currentStep + 1} of ${STATUS_STEPS.length}`}
-      style={styles.timelineCard}
+      accessibilityLabel={`Order progress: ${activeStep.label}, step ${currentStep + 1} of ${STATUS_STEPS.length}`}
+      style={styles.trackCard}
     >
-      <View style={styles.progressHeader}>
-        <View style={styles.progressHeading}>
-          <Text style={styles.timelineTitle}>Order journey</Text>
-          <Text style={styles.progressSubtitle}>
-            We update this as the restaurant and driver make progress.
-          </Text>
-        </View>
-        <View
-          style={[styles.progressCount, { borderColor: `${header.tone}33` }]}
-        >
-          <Text style={[styles.progressCountText, { color: header.tone }]}>
-            {currentStep + 1}/{STATUS_STEPS.length}
-          </Text>
+      <View style={styles.trackHeader}>
+        <Text style={styles.trackEyebrow}>ORDER STATUS</Text>
+        <Text style={[styles.trackCount, { color: header.tone }]}>
+          {currentStep + 1}/{STATUS_STEPS.length}
+        </Text>
+      </View>
+
+      <OrderStepMotion key={status} status={status} tone={header.tone} />
+
+      <View style={styles.trackRail}>
+        <View style={styles.trackRailTrack} />
+        <Animated.View
+          style={[
+            styles.trackRailFill,
+            { backgroundColor: header.tone },
+            fillStyle,
+          ]}
+        />
+        <View style={styles.trackNodes}>
+          {STATUS_STEPS.map((step, index) => (
+            <TrackNode
+              active={currentStep === index}
+              done={currentStep > index}
+              icon={step.icon}
+              key={step.key}
+              label={step.shortLabel}
+              tone={header.tone}
+            />
+          ))}
         </View>
       </View>
 
-      <View style={styles.progressSteps}>
-        {STATUS_STEPS.map((step, index) => (
-          <OrderProgressStep
-            currentStep={currentStep}
-            index={index}
-            key={step.key}
-            progress={progress}
-            reduceMotion={reduceMotion}
-            step={step}
-            tone={header.tone}
-          />
-        ))}
+      <View style={styles.nowCard}>
+        <View
+          style={[styles.nowIcon, { backgroundColor: `${header.tone}18` }]}
+        >
+          <AppIcon color={header.tone} name={activeStep.icon} size="md" />
+        </View>
+        <View style={styles.nowCopy}>
+          <Text style={styles.nowTitle}>{activeStep.label}</Text>
+          <Text style={styles.nowDetail}>{activeStep.detail}</Text>
+        </View>
+        {status !== OrderStatus.DELIVERED ? (
+          <View
+            style={[styles.livePill, { backgroundColor: `${header.tone}18` }]}
+          >
+            <Animated.View
+              style={[
+                styles.liveDot,
+                { backgroundColor: header.tone },
+                liveDotStyle,
+              ]}
+            />
+            <Text style={[styles.liveText, { color: header.tone }]}>Live</Text>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -420,6 +394,7 @@ function OrderProgressStepper({ status }: { status: OrderStatusType }) {
 
 export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const orderUpdate = useOrderSocket(id ?? null);
   const { initPaymentSheet, presentPaymentSheet, isSupported } =
@@ -683,107 +658,241 @@ export default function OrderDetailScreen() {
       order.status === OrderStatus.PICKED_UP ||
       order.status === OrderStatus.DELIVERED);
 
+  const subtotal = order.subtotalAmount ?? order.totalAmount;
+  const discount = order.discountAmount ?? "0";
+  const hasDiscount = Number(discount) > 0;
+  const itemCount = order.items.reduce(
+    (sum, item) => sum + Number(item.quantity),
+    0,
+  );
+
+  if (isPending) {
+    return (
+      <View style={styles.container}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.checkoutScroll,
+            { paddingBottom: 110 + Math.max(insets.bottom, 12) },
+          ]}
+          showsVerticalScrollIndicator={false}
+        >
+          <Pressable style={styles.back} onPress={() => router.back()}>
+            <View style={styles.backContent}>
+              <AppIcon name="back" size="sm" color={brand.colors.light.ink} />
+              <Text style={styles.checkoutBackText}>Back</Text>
+            </View>
+          </Pressable>
+
+          <Text style={styles.checkoutEyebrow}>CHECKOUT</Text>
+          <Text style={styles.checkoutTitle}>Review & pay</Text>
+          <Text style={styles.checkoutSubtitle}>
+            Confirm delivery and pay securely to place this order.
+          </Text>
+
+          <View style={styles.checkoutSection}>
+            <View style={styles.checkoutSectionHeader}>
+              <AppIcon
+                color={brand.colors.light.primary}
+                name="deliveryLocation"
+                size="sm"
+              />
+              <Text style={styles.checkoutSectionTitle}>Deliver to</Text>
+            </View>
+            <Text style={styles.checkoutAddress}>{order.deliveryAddress}</Text>
+          </View>
+
+          <View style={styles.checkoutSection}>
+            <View style={styles.checkoutSectionHeader}>
+              <AppIcon
+                color={brand.colors.light.primary}
+                name="restaurant"
+                size="sm"
+              />
+              <Text style={styles.checkoutSectionTitle}>
+                {restaurant?.name ?? "Restaurant"}
+              </Text>
+            </View>
+            <Text style={styles.checkoutMeta}>
+              {itemCount} item{itemCount === 1 ? "" : "s"} · Order #
+              {order.id.slice(0, 8)}
+            </Text>
+            {order.items.map((item) => {
+              const menuItem = menuItems.find((m) => m.id === item.menuItemId);
+              const lineTotal =
+                parseFloat(item.price) * parseFloat(item.quantity);
+              return (
+                <View key={item.id} style={styles.checkoutItemRow}>
+                  <View style={styles.checkoutQtyBadge}>
+                    <Text style={styles.checkoutQtyText}>{item.quantity}</Text>
+                  </View>
+                  <Text numberOfLines={2} style={styles.checkoutItemName}>
+                    {menuItem?.name ?? "Menu item"}
+                  </Text>
+                  <Text style={styles.checkoutItemPrice}>
+                    {formatCurrency(lineTotal)}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+
+          <View style={styles.checkoutSection}>
+            <Text style={styles.checkoutSectionTitle}>Bill details</Text>
+            <View style={styles.billRow}>
+              <Text style={styles.billLabel}>Item total</Text>
+              <Text style={styles.billValue}>{formatCurrency(subtotal)}</Text>
+            </View>
+            {hasDiscount ? (
+              <View style={styles.billRow}>
+                <Text style={styles.billDiscountLabel}>Offer discount</Text>
+                <Text style={styles.billDiscountValue}>
+                  −{formatCurrency(discount)}
+                </Text>
+              </View>
+            ) : null}
+            <View style={styles.billRow}>
+              <Text style={styles.billLabel}>Delivery fee</Text>
+              <Text style={styles.billFree}>Free</Text>
+            </View>
+            <View style={styles.billDivider} />
+            <View style={styles.billRow}>
+              <Text style={styles.billTotalLabel}>To pay</Text>
+              <Text style={styles.billTotalValue}>
+                {formatCurrency(order.totalAmount)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.checkoutSection}>
+            <Text style={styles.checkoutSectionTitle}>Payment method</Text>
+            <View style={styles.paymentMethodRow}>
+              <View style={styles.paymentMethodIcon}>
+                <Image
+                  resizeMode="contain"
+                  source={require("../../../../../assets/images/payment-card-visual.png")}
+                  style={styles.paymentCardVisual}
+                />
+              </View>
+              <View style={styles.paymentMethodCopy}>
+                <Text style={styles.paymentMethodTitle}>
+                  Credit / Debit card
+                </Text>
+                <Text style={styles.paymentMethodHint}>
+                  Visa, Mastercard · encrypted with Stripe
+                </Text>
+              </View>
+              <View style={styles.selectedPill}>
+                <Text style={styles.selectedPillText}>Selected</Text>
+              </View>
+            </View>
+            <View style={styles.trustRow}>
+              <AppIcon
+                color={brand.colors.light.mint}
+                name="lock"
+                size="xs"
+              />
+              <Text style={styles.trustText}>
+                Your payment is protected. Card details stay with Stripe.
+              </Text>
+            </View>
+          </View>
+        </ScrollView>
+
+        <View
+          style={[
+            styles.payBar,
+            { paddingBottom: Math.max(insets.bottom, 12) },
+          ]}
+        >
+          <View style={styles.payBarCopy}>
+            <Text style={styles.payBarLabel}>Total</Text>
+            <Text style={styles.payBarAmount}>
+              {formatCurrency(order.totalAmount)}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel={`Pay ${formatCurrency(order.totalAmount)}`}
+            accessibilityRole="button"
+            accessibilityState={{ busy: isBusy, disabled: isBusy }}
+            disabled={isBusy}
+            onPress={() => void handlePayment()}
+            style={({ pressed }) => [
+              styles.payBarButton,
+              isBusy && styles.buttonDisabled,
+              pressed && !isBusy && styles.payBarPressed,
+            ]}
+          >
+            {isBusy ? (
+              <View style={styles.payButtonContent}>
+                <ActivityIndicator color="#fff" />
+                <Text style={styles.payBarButtonText}>
+                  {confirmingPayment ? "Confirming…" : "Opening…"}
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.payBarButtonText}>
+                Pay {formatCurrency(order.totalAmount)}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+
+        <PaymentSuccessCelebration
+          amount={formatCurrency(order.totalAmount)}
+          onComplete={hidePaymentSuccess}
+          visible={showPaymentSuccess}
+        />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         <Pressable style={styles.back} onPress={() => router.back()}>
           <View style={styles.backContent}>
-            <AppIcon name="back" size="sm" color={brand.colors.light.primary} />
-            <Text style={styles.backText}>Back</Text>
+            <AppIcon name="back" size="sm" color={brand.colors.light.ink} />
+            <Text style={styles.checkoutBackText}>Back</Text>
           </View>
         </Pressable>
 
-        <View style={[styles.successCard, { borderColor: `${header.tone}33` }]}>
-          <View
-            style={[
-              styles.successIcon,
-              { backgroundColor: `${header.tone}18` },
-            ]}
-          >
-            <AppIcon name={header.icon} size="xl" color={header.tone} />
-          </View>
-          <Text style={styles.title}>{header.title}</Text>
-          <Text style={styles.subtitle}>{header.subtitle}</Text>
-          {isFetching && !isLoading && shouldPollOrder(order.status) ? (
-            <Text style={styles.liveHint}>Updating status…</Text>
-          ) : null}
-        </View>
+        <Text style={styles.checkoutEyebrow}>TRACKING</Text>
+        <Text style={styles.checkoutTitle}>{header.title}</Text>
+        <Text style={styles.checkoutSubtitle}>{header.subtitle}</Text>
+        {isFetching && !isLoading && shouldPollOrder(order.status) ? (
+          <Text style={styles.liveHint}>Updating status…</Text>
+        ) : null}
 
         <OrderProgressStepper status={order.status} />
 
         {showTrackingMap && deliveryCoords ? (
-          <View style={styles.trackingCard}>
-            <View style={styles.trackingHeader}>
-              <Text style={styles.trackingTitle}>Delivery map</Text>
-              <Text style={styles.trackingSubtitle}>
-                {order.status === OrderStatus.PICKED_UP
-                  ? driverLocation
-                    ? "Your driver is on the way — map updates live."
-                    : "Waiting for driver GPS signal…"
-                  : "Your drop-off pin is saved for the driver."}
-              </Text>
+          <View style={styles.checkoutSection}>
+            <View style={styles.checkoutSectionHeader}>
+              <AppIcon
+                color={brand.colors.light.primary}
+                name="map"
+                size="sm"
+              />
+              <Text style={styles.checkoutSectionTitle}>Delivery map</Text>
             </View>
+            <Text style={styles.checkoutMeta}>
+              {order.status === OrderStatus.PICKED_UP
+                ? driverLocation
+                  ? "Your driver is on the way — map updates live."
+                  : "Waiting for driver GPS signal…"
+                : "Your drop-off pin is saved for the driver."}
+            </Text>
             <OrderTrackingMap
               delivery={deliveryCoords}
               driver={driverLocation}
-              live={order.status === OrderStatus.PICKED_UP && Boolean(driverLocation)}
+              live={
+                order.status === OrderStatus.PICKED_UP &&
+                Boolean(driverLocation)
+              }
             />
-          </View>
-        ) : null}
-
-        {isPending ? (
-          <View style={styles.paymentCard}>
-            <View style={styles.paymentTitleRow}>
-              <View style={styles.paymentIconWrap}>
-                <AppIcon name="lock" size="sm" color="#FFFFFF" />
-              </View>
-              <Text style={styles.paymentTitle}>Secure checkout</Text>
-            </View>
-            <Text style={styles.paymentText}>
-              Pay {formatCurrency(order.totalAmount)} securely with Stripe to
-              confirm your order.
-            </Text>
-            <View style={styles.paymentFeatures}>
-              <View style={styles.paymentFeatureRow}>
-                <AppIcon
-                  name="check"
-                  size="xs"
-                  color={brand.colors.light.accent}
-                />
-                <Text style={styles.paymentFeature}>Encrypted payment</Text>
-              </View>
-              <View style={styles.paymentFeatureRow}>
-                <AppIcon
-                  name="creditCard"
-                  size="xs"
-                  color={brand.colors.light.accent}
-                />
-                <Text style={styles.paymentFeature}>
-                  Card payment through Stripe
-                </Text>
-              </View>
-            </View>
-            <Pressable
-              accessibilityLabel={`Pay ${formatCurrency(order.totalAmount)}`}
-              accessibilityRole="button"
-              accessibilityState={{ busy: isBusy, disabled: isBusy }}
-              style={[styles.payButton, isBusy && styles.buttonDisabled]}
-              onPress={() => void handlePayment()}
-              disabled={isBusy}
-            >
-              {isBusy ? (
-                <View style={styles.payButtonContent}>
-                  <ActivityIndicator color="#fff" />
-                  <Text style={styles.payButtonText}>
-                    {confirmingPayment ? "Confirming..." : "Opening payment..."}
-                  </Text>
-                </View>
-              ) : (
-                <Text style={styles.payButtonText}>
-                  Pay {formatCurrency(order.totalAmount)}
-                </Text>
-              )}
-            </Pressable>
           </View>
         ) : null}
 
@@ -797,60 +906,86 @@ export default function OrderDetailScreen() {
           />
         ) : null}
 
-        <View style={styles.card}>
-          <View style={styles.row}>
-            <Text style={styles.label}>Order ID</Text>
-            <Text style={styles.value}>{order.id.slice(0, 8)}...</Text>
+        <View style={styles.checkoutSection}>
+          <View style={styles.checkoutSectionHeader}>
+            <AppIcon
+              color={brand.colors.light.primary}
+              name="deliveryLocation"
+              size="sm"
+            />
+            <Text style={styles.checkoutSectionTitle}>Deliver to</Text>
           </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Status</Text>
-            <OrderStatusChip status={order.status} compact />
+          <Text style={styles.checkoutAddress}>{order.deliveryAddress}</Text>
+          <Text style={styles.checkoutMeta}>
+            Order #{order.id.slice(0, 8)}
+          </Text>
+        </View>
+
+        <View style={styles.checkoutSection}>
+          <View style={styles.checkoutSectionHeader}>
+            <AppIcon
+              color={brand.colors.light.primary}
+              name="restaurant"
+              size="sm"
+            />
+            <Text style={styles.checkoutSectionTitle}>
+              {restaurant?.name ?? "Restaurant"}
+            </Text>
           </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Restaurant</Text>
-            <Text style={styles.value}>{restaurant?.name ?? "Loading..."}</Text>
+          {order.items.map((item) => {
+            const menuItem = menuItems.find((m) => m.id === item.menuItemId);
+            const lineTotal =
+              parseFloat(item.price) * parseFloat(item.quantity);
+            return (
+              <View key={item.id} style={styles.checkoutItemRow}>
+                <View style={styles.checkoutQtyBadge}>
+                  <Text style={styles.checkoutQtyText}>{item.quantity}</Text>
+                </View>
+                <Text numberOfLines={2} style={styles.checkoutItemName}>
+                  {menuItem?.name ?? "Menu item"}
+                </Text>
+                <Text style={styles.checkoutItemPrice}>
+                  {formatCurrency(lineTotal)}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+
+        <View style={styles.checkoutSection}>
+          <Text style={styles.checkoutSectionTitle}>Bill details</Text>
+          <View style={styles.billRow}>
+            <Text style={styles.billLabel}>Item total</Text>
+            <Text style={styles.billValue}>{formatCurrency(subtotal)}</Text>
           </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Delivery</Text>
-            <Text style={[styles.value, styles.address]}>
-              {order.deliveryAddress}
+          {hasDiscount ? (
+            <View style={styles.billRow}>
+              <Text style={styles.billDiscountLabel}>Offer discount</Text>
+              <Text style={styles.billDiscountValue}>
+                −{formatCurrency(discount)}
+              </Text>
+            </View>
+          ) : null}
+          <View style={styles.billRow}>
+            <Text style={styles.billLabel}>Delivery fee</Text>
+            <Text style={styles.billFree}>Free</Text>
+          </View>
+          <View style={styles.billDivider} />
+          <View style={styles.billRow}>
+            <Text style={styles.billTotalLabel}>
+              {order.status === OrderStatus.CANCELLED ? "Order total" : "Paid"}
+            </Text>
+            <Text style={styles.billTotalValue}>
+              {formatCurrency(order.totalAmount)}
             </Text>
           </View>
         </View>
 
-        <Text style={styles.sectionTitle}>Items</Text>
-        {order.items.map((item) => {
-          const menuItem = menuItems.find((m) => m.id === item.menuItemId);
-          const lineTotal = parseFloat(item.price) * parseFloat(item.quantity);
-          return (
-            <View key={item.id} style={styles.itemCard}>
-              <View style={styles.itemBody}>
-                <Text style={styles.itemName}>
-                  {menuItem?.name ?? "Menu item"}
-                </Text>
-                <Text style={styles.itemMeta}>
-                  {item.quantity} x {formatCurrency(item.price)}
-                </Text>
-              </View>
-              <Text style={styles.itemPrice}>{formatCurrency(lineTotal)}</Text>
-            </View>
-          );
-        })}
-
-        <View style={styles.totalCard}>
-          <Text style={styles.totalLabel}>
-            {isPending ? "Total due" : "Total paid"}
-          </Text>
-          <Text style={styles.totalValue}>
-            {formatCurrency(order.totalAmount)}
-          </Text>
-        </View>
-
         <Pressable
-          style={styles.secondaryButton}
+          style={styles.homeButton}
           onPress={() => router.replace("/(customer)/(index)")}
         >
-          <Text style={styles.secondaryButtonText}>Back to home</Text>
+          <Text style={styles.homeButtonText}>Back to home</Text>
         </Pressable>
       </ScrollView>
       <PaymentSuccessCelebration
@@ -887,299 +1022,439 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 3,
   },
-  backText: {
-    fontSize: 16,
-    color: brand.colors.light.primary,
-    fontWeight: "800",
-  },
-  successCard: {
-    backgroundColor: brand.colors.light.surface,
-    borderRadius: brand.radius.large,
-    padding: 20,
-    alignItems: "center",
-    marginBottom: 16,
-    borderWidth: 1,
-    ...brand.shadow,
-  },
-  successIcon: {
-    alignItems: "center",
-    borderRadius: 30,
-    height: 64,
-    justifyContent: "center",
-    marginBottom: 8,
-    width: 64,
-  },
   title: {
-    fontSize: 24,
-    fontWeight: "900",
     color: brand.colors.light.ink,
-    letterSpacing: -0.4,
-    marginBottom: 4,
+    fontSize: 22,
+    fontWeight: "900",
+    marginBottom: 8,
     textAlign: "center",
-  },
-  subtitle: {
-    fontSize: 14,
-    color: brand.colors.light.inkMuted,
-    textAlign: "center",
-    lineHeight: 20,
   },
   liveHint: {
-    marginTop: 8,
-    fontSize: 12,
     color: brand.colors.light.primary,
-    textAlign: "center",
-  },
-  timelineCard: {
-    backgroundColor: brand.colors.light.surface,
-    borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.large,
-    borderWidth: 1,
-    padding: 16,
-    marginBottom: 16,
-  },
-  trackingCard: {
-    backgroundColor: brand.colors.light.surface,
-    borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.large,
-    borderWidth: 1,
-    marginBottom: 16,
-    padding: 16,
-    gap: 12,
-  },
-  trackingHeader: {
-    gap: 4,
-  },
-  trackingTitle: {
-    color: brand.colors.light.ink,
-    fontSize: 17,
-    fontWeight: "900",
-  },
-  trackingSubtitle: {
-    color: brand.colors.light.inkMuted,
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  timelineTitle: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: brand.colors.light.ink,
-    letterSpacing: -0.15,
-  },
-  progressHeader: {
-    alignItems: "flex-start",
-    flexDirection: "row",
-    gap: 12,
-    justifyContent: "space-between",
-    marginBottom: 18,
-  },
-  progressHeading: {
-    flex: 1,
-  },
-  progressSubtitle: {
-    color: brand.colors.light.inkMuted,
     fontSize: 12,
-    lineHeight: 17,
-    marginTop: 3,
+    fontWeight: "700",
+    marginBottom: 10,
+    marginTop: 2,
   },
-  progressCount: {
-    alignItems: "center",
-    backgroundColor: brand.colors.light.surfaceMuted,
-    borderRadius: brand.radius.pill,
-    borderWidth: 1,
-    justifyContent: "center",
-    minWidth: 42,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-  },
-  progressCountText: {
-    fontSize: 12,
-    fontWeight: "900",
-  },
-  progressSteps: {
-    gap: 0,
-  },
-  progressStep: {
-    flexDirection: "row",
-    minHeight: 90,
-  },
-  progressStepLast: {
-    minHeight: 44,
-  },
-  progressRail: {
-    alignItems: "center",
-    position: "relative",
-    width: 38,
-  },
-  progressStepHalo: {
-    borderRadius: 22,
-    height: 36,
-    left: 1,
-    position: "absolute",
-    top: 0,
-    width: 36,
-  },
-  progressStepIcon: {
-    alignItems: "center",
-    backgroundColor: brand.colors.light.surfaceMuted,
-    borderColor: brand.colors.light.border,
+  trackCard: {
+    backgroundColor: brand.colors.light.surface,
     borderRadius: 18,
-    borderWidth: 1,
-    height: 36,
-    justifyContent: "center",
-    width: 36,
-    zIndex: 1,
-  },
-  progressStepIconDone: {
-    backgroundColor: "#E7F6F0",
-    borderColor: "#B9E7D9",
-  },
-  progressStepIconActive: {
-    borderColor: "transparent",
+    marginBottom: 12,
+    padding: 16,
     ...brand.shadow,
   },
-  progressStepIconUpcoming: {
-    backgroundColor: brand.colors.light.surfaceMuted,
+  trackHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 16,
   },
-  progressConnector: {
-    backgroundColor: brand.colors.light.border,
-    height: PROGRESS_CONNECTOR_HEIGHT,
-    marginVertical: 4,
-    overflow: "hidden",
-    width: 2,
-  },
-  progressConnectorFill: {
-    backgroundColor: brand.colors.light.mint,
-    height: PROGRESS_CONNECTOR_HEIGHT,
-    width: 2,
-  },
-  progressStepCopy: {
-    flex: 1,
-    paddingBottom: 10,
-    paddingLeft: 10,
-    paddingRight: 2,
-    paddingTop: 2,
-  },
-  progressStepLabel: {
+  trackEyebrow: {
     color: brand.colors.light.inkMuted,
-    fontSize: 14,
-    fontWeight: "800",
-    lineHeight: 18,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.9,
   },
-  progressStepLabelDone: {
+  trackCount: {
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  trackRail: {
+    marginBottom: 16,
+    paddingTop: 4,
+    position: "relative",
+  },
+  trackRailTrack: {
+    backgroundColor: brand.colors.light.border,
+    borderRadius: 999,
+    height: 3,
+    left: 14,
+    position: "absolute",
+    right: 14,
+    top: 14,
+  },
+  trackRailFill: {
+    borderRadius: 999,
+    height: 3,
+    left: 14,
+    position: "absolute",
+    top: 14,
+  },
+  trackNodes: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  trackNode: {
+    alignItems: "center",
+    flex: 1,
+    gap: 6,
+  },
+  trackDot: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: 14,
+    borderWidth: 2,
+    height: 28,
+    justifyContent: "center",
+    width: 28,
+  },
+  trackDotDone: {
+    backgroundColor: brand.colors.light.mint,
+    borderColor: brand.colors.light.mint,
+  },
+  trackDotActive: {
+    borderWidth: 2,
+  },
+  trackLabel: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 10,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  trackLabelActive: {
     color: brand.colors.light.ink,
+    fontWeight: "900",
   },
-  progressStepDetail: {
+  nowCard: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.canvas,
+    borderRadius: 14,
+    flexDirection: "row",
+    gap: 12,
+    padding: 12,
+  },
+  nowIcon: {
+    alignItems: "center",
+    borderRadius: 14,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  nowCopy: {
+    flex: 1,
+  },
+  nowTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  nowDetail: {
     color: brand.colors.light.inkMuted,
     fontSize: 12,
     lineHeight: 17,
     marginTop: 2,
   },
-  currentStage: {
+  livePill: {
     alignItems: "center",
+    borderRadius: brand.radius.pill,
     flexDirection: "row",
     gap: 5,
-    marginTop: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
   },
-  currentStageDot: {
+  liveDot: {
     borderRadius: 3,
     height: 6,
     width: 6,
   },
-  currentStageText: {
+  liveText: {
     fontSize: 11,
     fontWeight: "900",
   },
-  cancelledJourney: {
+  cancelledBanner: {
     alignItems: "flex-start",
     backgroundColor: "#FFF0F2",
-    borderColor: "#F8CBD2",
-    borderRadius: brand.radius.medium,
-    borderWidth: 1,
+    borderRadius: 14,
     flexDirection: "row",
     gap: 10,
     padding: 12,
   },
-  cancelledJourneyIcon: {
+  cancelledIcon: {
     alignItems: "center",
     backgroundColor: "#FFFFFF",
     borderRadius: 16,
-    height: 32,
+    height: 36,
     justifyContent: "center",
-    width: 32,
+    width: 36,
   },
-  cancelledJourneyCopy: {
+  cancelledCopy: {
     flex: 1,
   },
-  cancelledJourneyTitle: {
+  cancelledTitle: {
     color: brand.colors.light.danger,
     fontSize: 14,
     fontWeight: "900",
   },
-  cancelledJourneyText: {
+  cancelledText: {
     color: "#944052",
     fontSize: 12,
     lineHeight: 17,
     marginTop: 2,
   },
-  paymentCard: {
+  homeButton: {
+    alignItems: "center",
     backgroundColor: brand.colors.light.ink,
-    borderRadius: brand.radius.large,
-    padding: 18,
-    marginBottom: 16,
-  },
-  paymentTitleRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 9,
+    borderRadius: 14,
     marginBottom: 8,
-  },
-  paymentIconWrap: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.14)",
-    borderRadius: 12,
-    height: 32,
+    marginTop: 4,
+    minHeight: 52,
     justifyContent: "center",
-    width: 32,
   },
-  paymentTitle: {
-    fontSize: 18,
+  homeButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
     fontWeight: "900",
-    color: "#fff",
   },
-  paymentText: {
-    fontSize: 14,
-    color: "#D1D5DB",
-    lineHeight: 20,
-    marginBottom: 12,
+  checkoutScroll: {
+    padding: 16,
+    paddingTop: 8,
   },
-  paymentFeatures: {
-    gap: 6,
-    marginBottom: 16,
-  },
-  paymentFeatureRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 6,
-  },
-  paymentFeature: {
-    fontSize: 13,
-    color: "#9CA3AF",
-  },
-  payButton: {
-    backgroundColor: brand.colors.light.primary,
-    borderRadius: brand.radius.medium,
-    paddingVertical: 16,
-    alignItems: "center",
-  },
-  payButtonContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  payButtonText: {
-    color: "#fff",
+  checkoutBackText: {
+    color: brand.colors.light.ink,
     fontSize: 16,
     fontWeight: "800",
+  },
+  checkoutEyebrow: {
+    color: brand.colors.light.primary,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1.1,
+    marginBottom: 4,
+  },
+  checkoutTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 28,
+    fontWeight: "900",
+    letterSpacing: -0.6,
+  },
+  checkoutSubtitle: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 18,
+    marginTop: 6,
+  },
+  checkoutSection: {
+    backgroundColor: brand.colors.light.surface,
+    borderRadius: 22,
+    marginBottom: 12,
+    padding: 16,
+    ...brand.shadow,
+  },
+  checkoutSectionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 10,
+  },
+  checkoutSectionTitle: {
+    color: brand.colors.light.ink,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  checkoutAddress: {
+    color: brand.colors.light.ink,
+    fontSize: 15,
+    fontWeight: "600",
+    lineHeight: 22,
+  },
+  checkoutMeta: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
+  checkoutItemRow: {
+    alignItems: "center",
+    borderTopColor: brand.colors.light.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: 10,
+    paddingVertical: 12,
+  },
+  checkoutQtyBadge: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: 8,
+    height: 28,
+    justifyContent: "center",
+    minWidth: 28,
+    paddingHorizontal: 6,
+  },
+  checkoutQtyText: {
+    color: brand.colors.light.primaryText,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  checkoutItemName: {
+    color: brand.colors.light.ink,
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  checkoutItemPrice: {
+    color: brand.colors.light.ink,
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  billRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 10,
+  },
+  billLabel: {
+    color: "#D8CBD2",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  billValue: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  billDiscountLabel: {
+    color: brand.colors.light.mint,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  billDiscountValue: {
+    color: brand.colors.light.mint,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  billFree: {
+    color: brand.colors.light.mint,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  billDivider: {
+    backgroundColor: "rgba(37,25,42,0.12)",
+    height: StyleSheet.hairlineWidth,
+    marginTop: 14,
+  },
+  billTotalLabel: {
+    color: brand.colors.light.ink,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  billTotalValue: {
+    color: brand.colors.light.ink,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  paymentMethodRow: {
+    alignItems: "center",
+    backgroundColor: "#FFF2ED",
+    borderRadius: 16,
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 12,
+    padding: 12,
+  },
+  paymentMethodIcon: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: 12,
+    height: 48,
+    justifyContent: "center",
+    width: 68,
+  },
+  paymentCardVisual: {
+    height: 48,
+    width: 68,
+  },
+  paymentMethodCopy: {
+    flex: 1,
+  },
+  paymentMethodTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  paymentMethodHint: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  selectedPill: {
+    backgroundColor: `${brand.colors.light.mint}22`,
+    borderRadius: brand.radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  selectedPillText: {
+    color: brand.colors.light.mint,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  trustRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 12,
+  },
+  trustText: {
+    color: brand.colors.light.inkMuted,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 16,
+  },
+  payBar: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderTopColor: brand.colors.light.border,
+    borderTopWidth: 1,
+    bottom: 0,
+    flexDirection: "row",
+    gap: 12,
+    left: 0,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    position: "absolute",
+    right: 0,
+    ...brand.shadow,
+  },
+  payBarCopy: {
+    flexShrink: 0,
+  },
+  payBarLabel: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  payBarAmount: {
+    color: brand.colors.light.ink,
+    fontSize: 18,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+  payBarButton: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primary,
+    borderRadius: 18,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 58,
+    paddingHorizontal: 14,
+  },
+  payBarButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  payBarPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.99 }],
+  },
+  payButtonContent: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
   },
   buttonDisabled: {
     opacity: 0.75,

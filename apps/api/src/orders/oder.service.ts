@@ -7,7 +7,15 @@ import {
   NotFoundException,
   forwardRef,
 } from '@nestjs/common';
-import { and, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  type SQL,
+} from 'drizzle-orm';
 import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
 import type { schema as RelationsSchema } from '../db/relations';
 import * as schema from '../db/schema';
@@ -25,6 +33,7 @@ import { DriverService } from '../driver/driver.service';
 import { OffersService } from '../offers/offers.service';
 import { LocationService } from '../location/location.service';
 import { PaymentsService } from '../payments/payment.service';
+import { OperationsService } from '../operations/operations.service';
 
 @Injectable()
 export class OrdersService {
@@ -38,6 +47,7 @@ export class OrdersService {
     private offersService: OffersService,
     private locationService: LocationService,
     private paymentsService: PaymentsService,
+    private operationsService: OperationsService,
   ) {}
 
   async create(customerId: string, dto: CreateOrderDto) {
@@ -188,6 +198,13 @@ export class OrdersService {
         );
       }
 
+      await tx.insert(schema.orderEvents).values({
+        orderId: order.id,
+        actorId: customerId,
+        type: 'ORDER_CREATED',
+        metadata: { status: OrderStatus.PENDING },
+      });
+
       return order;
     });
   }
@@ -196,6 +213,7 @@ export class OrdersService {
     orderId: string,
     newStatus: OrderStatusType,
     user: JwtPayload,
+    cancellationReason?: string,
   ) {
     const [order] = await this.db
       .select()
@@ -233,7 +251,7 @@ export class OrdersService {
     if (newStatus === OrderStatus.CANCELLED) {
       const cancelled = await this.paymentsService.cancelAndRefundOrder(
         order.id,
-        'Cancelled by restaurant owner',
+        cancellationReason?.trim() || 'Cancelled by restaurant owner',
       );
       await this.clearTerminalDriverLocation(cancelled.id);
       return cancelled;
@@ -250,6 +268,7 @@ export class OrdersService {
             eq(schema.orders.id, orderId),
             eq(schema.orders.status, order.status),
             eq(schema.orders.driverId, user.sub),
+            isNotNull(schema.orders.driverAcceptedAt),
             isNull(schema.orders.cancellationRequestedAt),
           )
         : and(
@@ -273,7 +292,15 @@ export class OrdersService {
       );
     }
 
+    await this.db.insert(schema.orderEvents).values({
+      orderId: updated.id,
+      actorId: user.sub,
+      type: 'ORDER_STATUS_CHANGED',
+      metadata: { from: order.status, to: newStatus, actorRole: user.role },
+    });
+
     this.ordersGateway.emitOrderUpdate(updated);
+    void this.operationsService.queueCustomerStatusNotification(updated);
 
     if (newStatus === OrderStatus.DELIVERED) {
       await this.clearTerminalDriverLocation(updated.id);

@@ -50,6 +50,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     userInterfaceStyle: 'automatic',
     ios: {
       icon: './assets/images/wasil-icon.png',
+      infoPlist: {
+        NSSupportsLiveActivities: true,
+        NSSupportsLiveActivitiesFrequentUpdates: true,
+        UIBackgroundModes: ['remote-notification', 'fetch'],
+      },
       config: {
         googleMapsApiKey: googleMapsIosApiKey,
       },
@@ -61,6 +66,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       googleServicesFile:
         process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
       usesCleartextTraffic: true,
+      permissions: ['POST_NOTIFICATIONS', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_DATA_SYNC'],
       adaptiveIcon: {
         backgroundColor: '#25192A',
         foregroundImage: './assets/images/wasil-adaptive-foreground.png',
@@ -110,6 +116,14 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         },
       ],
       '@react-native-google-signin/google-signin',
+      [
+        'expo-notifications',
+        {
+          icon: './assets/images/wasil-icon.png',
+          color: '#F2552C',
+          defaultChannel: 'active-order-tracking',
+        },
+      ],
     ],
     extra: {
       ...config.extra,

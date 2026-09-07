@@ -1,24 +1,28 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { router } from "expo-router";
+import { useQuery } from "@tanstack/react-query";
+import type { UserAddress } from "@food-delivery/types";
 
+import { EditProfileModal } from "@/components/edit-profile-modal";
+import { ProfileAvatar } from "@/components/profile-avatar";
 import { WasilLogo, WasilMark } from "@/components/wasil-brand";
 import { AppIcon, type AppIconName } from "@/components/wasil-icon-system";
 import { brand } from "@/constants/brand";
 import { BottomTabInset } from "@/constants/theme";
 import { useAuth } from "@/context/auth-context";
+import { api } from "@/lib/axios";
 
 type AccountRowProps = {
   detail: string;
   icon: AppIconName;
   label: string;
+  onPress?: () => void;
 };
 
-function AccountRow({ detail, icon, label }: AccountRowProps) {
-  return (
-    <View
-      accessible
-      accessibilityLabel={`${label}. ${detail}`}
-      style={styles.accountRow}
-    >
+function AccountRow({ detail, icon, label, onPress }: AccountRowProps) {
+  const content = (
+    <>
       <View style={styles.rowIcon}>
         <AppIcon color={brand.colors.light.primary} name={icon} size="sm" />
       </View>
@@ -26,13 +30,40 @@ function AccountRow({ detail, icon, label }: AccountRowProps) {
         <Text style={styles.rowLabel}>{label}</Text>
         <Text style={styles.rowDetail}>{detail}</Text>
       </View>
-      <AppIcon color={brand.colors.light.inkMuted} name="check" size="sm" />
+      <AppIcon
+        color={brand.colors.light.inkMuted}
+        name={onPress ? "more" : "check"}
+        size="sm"
+      />
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        accessibilityHint={`Opens ${label}`}
+        accessibilityLabel={`${label}. ${detail}`}
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.accountRow,
+          pressed && styles.accountRowPressed,
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View
+      accessible
+      accessibilityLabel={`${label}. ${detail}`}
+      style={styles.accountRow}
+    >
+      {content}
     </View>
   );
-}
-
-function getInitials(firstName: string, lastName: string) {
-  return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase() || "W";
 }
 
 function formatRole(role: string) {
@@ -41,6 +72,13 @@ function formatRole(role: string) {
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
+  const [editOpen, setEditOpen] = useState(false);
+  const addresses = useQuery({
+    queryKey: ["addresses"],
+    queryFn: () =>
+      api.get<UserAddress[]>("/addresses").then((res) => res.data),
+    enabled: Boolean(user),
+  });
 
   if (!user) {
     return null;
@@ -48,6 +86,13 @@ export default function ProfileScreen() {
 
   const fullName =
     `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Wasil customer";
+  const defaultAddress =
+    addresses.data?.find((item) => item.isDefault) ?? addresses.data?.[0];
+  const addressDetail = defaultAddress
+    ? `${defaultAddress.label} · ${defaultAddress.addressLine}`
+    : addresses.isLoading
+      ? "Loading your addresses…"
+      : "Add or manage delivery addresses";
 
   return (
     <View style={styles.container}>
@@ -68,11 +113,13 @@ export default function ProfileScreen() {
         <View style={styles.identityCard}>
           <View style={styles.identityGlow} />
           <View style={styles.identityTopRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {getInitials(user.firstName, user.lastName)}
-              </Text>
-            </View>
+            <ProfileAvatar
+              firstName={user.firstName}
+              imageUrl={user.imageUrl}
+              lastName={user.lastName}
+              size={72}
+              style={styles.avatar}
+            />
             <View style={styles.memberPill}>
               <AppIcon
                 color={brand.colors.light.accent}
@@ -101,6 +148,22 @@ export default function ProfileScreen() {
               {formatRole(user.role)} account · secure sign-in
             </Text>
           </View>
+          <Pressable
+            accessibilityLabel="Edit profile"
+            accessibilityRole="button"
+            onPress={() => setEditOpen(true)}
+            style={({ pressed }) => [
+              styles.editProfileButton,
+              pressed && styles.editProfilePressed,
+            ]}
+          >
+            <AppIcon
+              color={brand.colors.light.ink}
+              name="personalInformation"
+              size="xs"
+            />
+            <Text style={styles.editProfileText}>Edit profile</Text>
+          </Pressable>
         </View>
 
         <View style={styles.sectionHeader}>
@@ -109,21 +172,45 @@ export default function ProfileScreen() {
         </View>
         <View style={styles.accountCard}>
           <AccountRow
-            detail="Your contact details are ready"
+            detail={`${fullName} · tap to edit`}
             icon="personalInformation"
             label="Personal information"
+            onPress={() => setEditOpen(true)}
           />
           <View style={styles.divider} />
           <AccountRow
-            detail="Add a delivery address at checkout"
+            detail="Order and delivery updates"
+            icon="notifications"
+            label="Notifications"
+            onPress={() => router.push("/(customer)/notifications")}
+          />
+          <View style={styles.divider} />
+          <AccountRow
+            detail={addressDetail}
             icon="addresses"
             label="Delivery addresses"
+            onPress={() =>
+              router.push("/(customer)/(index)/addresses")
+            }
           />
           <View style={styles.divider} />
           <AccountRow
-            detail="Payments are confirmed securely"
+            detail="Handled securely when you place an order"
             icon="paymentMethods"
             label="Payment & receipts"
+            onPress={() =>
+              Alert.alert(
+                "Payments & receipts",
+                "Card payments are confirmed securely at checkout. Open Orders to review past receipts.",
+                [
+                  { text: "Not now", style: "cancel" },
+                  {
+                    text: "View orders",
+                    onPress: () => router.push("/(customer)/orders"),
+                  },
+                ],
+              )
+            }
           />
         </View>
 
@@ -139,7 +226,16 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <View style={styles.supportRow}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() =>
+            Alert.alert(
+              "Help & support",
+              "For order help, open the order details screen and contact support from there. You can also email support@wasil.app.",
+            )
+          }
+          style={styles.supportRow}
+        >
           <AppIcon
             color={brand.colors.light.inkMuted}
             name="helpSupport"
@@ -147,7 +243,7 @@ export default function ProfileScreen() {
           />
           <Text style={styles.supportText}>Need help with an order?</Text>
           <Text style={styles.supportStatus}>Support is here</Text>
-        </View>
+        </Pressable>
 
         <Pressable
           accessibilityHint="Signs out of your Wasil account"
@@ -170,6 +266,11 @@ export default function ProfileScreen() {
           </Text>
         </View>
       </ScrollView>
+
+      <EditProfileModal
+        onClose={() => setEditOpen(false)}
+        visible={editOpen}
+      />
     </View>
   );
 }
@@ -229,18 +330,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   avatar: {
-    alignItems: "center",
-    backgroundColor: "#FFF8F4",
-    borderRadius: 24,
-    height: 48,
-    justifyContent: "center",
-    width: 48,
-  },
-  avatarText: {
-    color: brand.colors.light.primary,
-    fontSize: 16,
-    fontWeight: "900",
-    letterSpacing: 0.3,
+    borderColor: "rgba(255, 248, 244, 0.35)",
+    borderWidth: 3,
   },
   memberPill: {
     alignItems: "center",
@@ -290,6 +381,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+  editProfileButton: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: brand.colors.light.accent,
+    borderRadius: brand.radius.pill,
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  editProfilePressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.98 }],
+  },
+  editProfileText: {
+    color: brand.colors.light.ink,
+    fontSize: 13,
+    fontWeight: "900",
+  },
   sectionHeader: {
     alignItems: "baseline",
     flexDirection: "row",
@@ -321,6 +432,9 @@ const styles = StyleSheet.create({
     gap: 12,
     minHeight: 75,
     paddingHorizontal: 15,
+  },
+  accountRowPressed: {
+    opacity: 0.72,
   },
   rowIcon: {
     alignItems: "center",

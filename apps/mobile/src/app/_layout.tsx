@@ -3,7 +3,10 @@ import { AppStripeProvider } from '@/components/app-stripe-provider';
 import { AuthProvider, useAuth } from '@/context/auth-context';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { UserRole } from '@food-delivery/types';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { OrderTrackingNotifications } from '@/components/order-tracking-notifications';
 
 function RootNavigator() {
   const { user, isLoading } = useAuth();
@@ -43,13 +46,17 @@ const queryClient = new QueryClient();
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AppStripeProvider>
-        <AuthProvider>
-          <AnimatedSplashOverlay />
-          <RootNavigator />
-        </AuthProvider>
-      </AppStripeProvider>
-    </QueryClientProvider>
+    <SafeAreaProvider>
+      <QueryClientProvider client={queryClient}>
+        <AppStripeProvider>
+          <AuthProvider>
+            <OrderTrackingNotifications />
+            <StatusBar style="dark" />
+            <AnimatedSplashOverlay />
+            <RootNavigator />
+          </AuthProvider>
+        </AppStripeProvider>
+      </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }

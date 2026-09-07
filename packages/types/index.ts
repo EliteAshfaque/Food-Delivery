@@ -55,6 +55,7 @@ export interface User{
     accountStatus: AccountStatus;
     firstName:string;
     lastName:string;
+    imageUrl: string | null;
     createdAt:Date;
 }
 export interface HealthCheckResponse{
@@ -156,6 +157,18 @@ export interface Order {
     cancellationReason: string | null;
     cancelledAt: Date | null;
     refundedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+export interface UserAddress {
+    id: string;
+    userId: string;
+    label: string;
+    addressLine: string;
+    latitude: number;
+    longitude: number;
+    isDefault: boolean;
     createdAt: Date;
     updatedAt: Date;
 }

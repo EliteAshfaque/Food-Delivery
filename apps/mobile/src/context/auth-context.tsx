@@ -35,6 +35,11 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   googleLogin: (idToken: string) => Promise<void>;
   register: (data: RegisterData) => Promise<RegisterResult>;
+  updateProfile: (data: {
+    firstName: string;
+    lastName: string;
+    imageUrl?: string | null;
+  }) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -121,6 +126,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(authenticatedUser);
   }
 
+  async function updateProfile(data: {
+    firstName: string;
+    lastName: string;
+    imageUrl?: string | null;
+  }) {
+    const { data: response } = await api.patch<{ user: User }>('/auth/me', {
+      firstName: data.firstName.trim(),
+      lastName: data.lastName.trim(),
+      ...(data.imageUrl !== undefined ? { imageUrl: data.imageUrl } : {}),
+    });
+    setUser(response.user);
+  }
+
   async function logout() {
     try {
       await deleteToken();
@@ -131,7 +149,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, isLoading, login, googleLogin, register, logout }}
+      value={{
+        user,
+        isLoading,
+        login,
+        googleLogin,
+        register,
+        updateProfile,
+        logout,
+      }}
     >
       {children}
     </AuthContext.Provider>

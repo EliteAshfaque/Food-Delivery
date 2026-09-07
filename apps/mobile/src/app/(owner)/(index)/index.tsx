@@ -1,12 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -131,6 +133,8 @@ function sortOrders(orders: OwnerOrder[]) {
 
 export default function OwnerHomeScreen() {
   const queryClient = useQueryClient();
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [cancellationReason, setCancellationReason] = useState("");
 
   const {
     data: restaurant,
@@ -218,12 +222,14 @@ export default function OwnerHomeScreen() {
     mutationFn: ({
       orderId,
       status,
+      reason,
     }: {
       orderId: string;
       status: OrderStatusType;
+      reason?: string;
     }) =>
       api
-        .patch(`/orders/${orderId}/status`, { status })
+        .patch(`/orders/${orderId}/status`, { status, reason })
         .then((res) => res.data),
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -244,18 +250,8 @@ export default function OwnerHomeScreen() {
 
   function handleStatusAction(orderId: string, action: StatusAction) {
     if (action.status === OrderStatus.CANCELLED) {
-      Alert.alert(
-        "Cancel order",
-        "Are you sure you want to cancel this order?",
-        [
-          { text: "Keep order", style: "cancel" },
-          {
-            text: "Cancel order",
-            style: "destructive",
-            onPress: () => updateStatus({ orderId, status: action.status }),
-          },
-        ],
-      );
+      setCancellationReason("");
+      setCancellingOrderId(orderId);
       return;
     }
 
@@ -482,6 +478,55 @@ export default function OwnerHomeScreen() {
           );
         }}
       />
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setCancellingOrderId(null)}
+        transparent
+        visible={Boolean(cancellingOrderId)}>
+        <View style={styles.cancelOverlay}>
+          <View style={styles.cancelSheet}>
+            <Text style={styles.cancelEyebrow}>ORDER INTERVENTION</Text>
+            <Text style={styles.cancelTitle}>Cancel this order?</Text>
+            <Text style={styles.cancelCopy}>
+              Tell the customer why. Any eligible payment refund will start automatically.
+            </Text>
+            <TextInput
+              maxLength={500}
+              multiline
+              onChangeText={setCancellationReason}
+              placeholder="Example: A kitchen equipment issue means we cannot prepare this order."
+              placeholderTextColor="#8C7D88"
+              style={styles.cancelInput}
+              value={cancellationReason}
+            />
+            <View style={styles.cancelActions}>
+              <Pressable
+                disabled={updatingStatus}
+                onPress={() => setCancellingOrderId(null)}
+                style={styles.keepOrderButton}>
+                <Text style={styles.keepOrderText}>Keep order</Text>
+              </Pressable>
+              <Pressable
+                disabled={!cancellationReason.trim() || updatingStatus}
+                onPress={() => {
+                  if (!cancellingOrderId) return;
+                  updateStatus({
+                    orderId: cancellingOrderId,
+                    status: OrderStatus.CANCELLED,
+                    reason: cancellationReason.trim(),
+                  });
+                  setCancellingOrderId(null);
+                }}
+                style={[
+                  styles.confirmCancelButton,
+                  (!cancellationReason.trim() || updatingStatus) && styles.buttonDisabled,
+                ]}>
+                {updatingStatus ? <ActivityIndicator color="#fff" /> : <Text style={styles.confirmCancelText}>Cancel & refund</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -490,6 +535,79 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F8F8F8",
+  },
+  cancelOverlay: {
+    backgroundColor: "rgba(37,25,42,0.48)",
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  cancelSheet: {
+    backgroundColor: "#FFF9F6",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+  },
+  cancelEyebrow: {
+    color: "#F2552C",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+  },
+  cancelTitle: {
+    color: "#28192E",
+    fontSize: 24,
+    fontWeight: "800",
+    marginTop: 7,
+  },
+  cancelCopy: {
+    color: "#766A73",
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 8,
+  },
+  cancelInput: {
+    backgroundColor: "#FFF",
+    borderColor: "#E9D9D3",
+    borderRadius: 14,
+    borderWidth: 1,
+    color: "#28192E",
+    fontSize: 15,
+    marginTop: 18,
+    minHeight: 92,
+    padding: 13,
+    textAlignVertical: "top",
+  },
+  cancelActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+  keepOrderButton: {
+    alignItems: "center",
+    borderColor: "#DCD2D7",
+    borderRadius: 14,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 52,
+  },
+  keepOrderText: {
+    color: "#34233A",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  confirmCancelButton: {
+    alignItems: "center",
+    backgroundColor: "#D93D35",
+    borderRadius: 14,
+    flex: 1.25,
+    justifyContent: "center",
+    minHeight: 52,
+  },
+  confirmCancelText: {
+    color: "#FFF",
+    fontSize: 15,
+    fontWeight: "800",
   },
   centered: {
     flex: 1,

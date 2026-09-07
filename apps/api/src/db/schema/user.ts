@@ -32,6 +32,9 @@ export const user = pgTable(
 
     lastName: text('last_name').notNull(),
 
+    // Profile photo: UploadThing URL or Google account picture URL.
+    imageUrl: text('image_url'),
+
     email: text('email').unique(),
 
     // Password is optional for accounts created through a verified identity

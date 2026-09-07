@@ -10,12 +10,14 @@ import type { schema as RelationsSchema } from '../db/relations';
 import * as schema from '../db/schema';
 import { AccountStatus, OrderStatus, UserRole } from '@food-delivery/types';
 import { OrdersGateway } from '../gateway/orders.gateway';
+import { OperationsService } from '../operations/operations.service';
 
 @Injectable()
 export class DriverService {
   constructor(
     @Inject('DB') private db: NeonDatabase<typeof RelationsSchema>,
     private ordersGateway: OrdersGateway,
+    private operationsService: OperationsService,
   ) {}
 
   async toggleOnline(driverId: string) {
@@ -67,17 +69,60 @@ export class DriverService {
         ),
       );
 
-    return orders.map(({ order, restaurant }) => ({
-      ...order,
-      restaurant: {
-        id: restaurant.id,
-        name: restaurant.name,
-        address: restaurant.address,
-        latitude: restaurant.latitude,
-        longitude: restaurant.longitude,
-        imageUrl: restaurant.imageUrl,
-      },
-    }));
+    return orders
+      .filter(
+        ({ order }) =>
+          order.status === OrderStatus.PICKED_UP ||
+          order.driverAcceptedAt !== null,
+      )
+      .map(({ order, restaurant }) => ({
+        ...order,
+        restaurant: {
+          id: restaurant.id,
+          name: restaurant.name,
+          address: restaurant.address,
+          latitude: restaurant.latitude,
+          longitude: restaurant.longitude,
+          imageUrl: restaurant.imageUrl,
+        },
+      }));
+  }
+
+  /** A driver must accept an offered READY order before it becomes active. */
+  async acceptOrder(orderId: string, driverId: string) {
+    const [accepted] = await this.db
+      .update(schema.orders)
+      .set({ driverAcceptedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.orders.id, orderId),
+          eq(schema.orders.driverId, driverId),
+          eq(schema.orders.status, OrderStatus.READY),
+          isNull(schema.orders.driverAcceptedAt),
+        ),
+      )
+      .returning();
+
+    if (!accepted) {
+      throw new ConflictException(
+        'This delivery is no longer available. Refresh and wait for another offer.',
+      );
+    }
+
+    await this.db.insert(schema.orderEvents).values({
+      orderId,
+      actorId: driverId,
+      type: 'DRIVER_ACCEPTED',
+      metadata: { driverId },
+    });
+    this.ordersGateway.emitOrderUpdate(accepted);
+    void this.operationsService.queueOrderNotification(
+      accepted.customerId,
+      accepted.id,
+      'Rider assigned',
+      'Your rider has accepted the delivery and will collect your order shortly.',
+    );
+    return accepted;
   }
 
   async assignDriver(orderId: string, excludeDriverId?: string) {
@@ -115,6 +160,18 @@ export class DriverService {
 
       this.ordersGateway.emitDriverAssigned(candidate.id, updatedOrder);
       this.ordersGateway.emitOrderUpdate(updatedOrder);
+      void this.operationsService.queueOrderNotification(
+        candidate.id,
+        updatedOrder.id,
+        'New delivery request',
+        'A pickup is ready. Open the app to accept or decline.',
+      );
+      await this.db.insert(schema.orderEvents).values({
+        orderId: updatedOrder.id,
+        actorId: candidate.id,
+        type: 'DRIVER_ASSIGNED',
+        metadata: { driverId: candidate.id, automatic: true },
+      });
 
       return updatedOrder;
     }
@@ -176,12 +233,18 @@ export class DriverService {
     // replacement driver, or from reopening a pickup that has already begun.
     const [declinedOrder] = await this.db
       .update(schema.orders)
-      .set({ driverId: null, updatedAt: new Date() })
+      .set({
+        driverId: null,
+        driverAcceptedAt: null,
+        driverDeclineReason: null,
+        updatedAt: new Date(),
+      })
       .where(
         and(
           eq(schema.orders.id, orderId),
           eq(schema.orders.driverId, driverId),
           eq(schema.orders.status, OrderStatus.READY),
+          isNull(schema.orders.driverAcceptedAt),
         ),
       )
       .returning();
@@ -202,6 +265,12 @@ export class DriverService {
     }
 
     this.ordersGateway.emitOrderUpdate(declinedOrder);
+    await this.db.insert(schema.orderEvents).values({
+      orderId: declinedOrder.id,
+      actorId: driverId,
+      type: 'DRIVER_DECLINED',
+      metadata: { driverId },
+    });
 
     // Try another online driver (exclude the one who declined)
     await this.assignDriver(orderId, driverId);
@@ -257,7 +326,12 @@ export class DriverService {
 
       const [updatedOrder] = await tx
         .update(schema.orders)
-        .set({ driverId, updatedAt: new Date() })
+        .set({
+          driverId,
+          driverAcceptedAt: null,
+          driverDeclineReason: null,
+          updatedAt: new Date(),
+        })
         .where(
           and(
             eq(schema.orders.id, orderId),

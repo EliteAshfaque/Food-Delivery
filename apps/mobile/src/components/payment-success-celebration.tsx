@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
   Easing,
   interpolate,
@@ -29,6 +29,47 @@ const CELEBRATION_SPARKS = [
   { color: "#F2552C", x: -34, y: 46 },
   { color: "#16856B", x: 35, y: 46 },
 ] as const;
+
+const PAYMENT_STEPS = [
+  { icon: "creditCard", label: "Paid" },
+  { icon: "orderConfirmed", label: "Confirmed" },
+  { icon: "orderPreparing", label: "Preparing" },
+] as const;
+
+function PaymentJourneyStep({
+  delay,
+  icon,
+  label,
+  progress,
+  reduceMotion,
+}: {
+  delay: number;
+  icon: (typeof PAYMENT_STEPS)[number]["icon"];
+  label: string;
+  progress: SharedValue<number>;
+  reduceMotion: boolean | null;
+}) {
+  const stepStyle = useAnimatedStyle(() => {
+    const stepProgress = Math.max(
+      0,
+      Math.min((progress.value - delay) / 0.22, 1),
+    );
+
+    return {
+      opacity: reduceMotion ? 1 : stepProgress,
+      transform: [{ scale: reduceMotion ? 1 : 0.82 + stepProgress * 0.18 }],
+    };
+  });
+
+  return (
+    <Animated.View style={[styles.journeyStep, stepStyle]}>
+      <View style={styles.journeyDot}>
+        <AppIcon color="#FFFFFF" name={icon} size="xs" />
+      </View>
+      <Text style={styles.journeyLabel}>{label}</Text>
+    </Animated.View>
+  );
+}
 
 function SuccessSpark({
   color,
@@ -75,6 +116,7 @@ export function PaymentSuccessCelebration({
   const haloOne = useSharedValue(0);
   const haloTwo = useSharedValue(0);
   const burstProgress = useSharedValue(0);
+  const journeyProgress = useSharedValue(0);
 
   useEffect(() => {
     if (!visible) return;
@@ -86,12 +128,14 @@ export function PaymentSuccessCelebration({
     haloOne.value = 0;
     haloTwo.value = 0;
     burstProgress.value = 0;
+    journeyProgress.value = 0;
 
     if (reduceMotion) {
       cardOpacity.value = 1;
       cardTranslateY.value = 0;
       medallionScale.value = 1;
       contentOpacity.value = 1;
+      journeyProgress.value = 1;
     } else {
       cardOpacity.value = withTiming(1, { duration: 180 });
       cardTranslateY.value = withTiming(0, {
@@ -112,6 +156,10 @@ export function PaymentSuccessCelebration({
         80,
         withTiming(1, { duration: 620, easing: Easing.out(Easing.cubic) }),
       );
+      journeyProgress.value = withDelay(
+        210,
+        withTiming(1, { duration: 620, easing: Easing.out(Easing.cubic) }),
+      );
     }
   }, [
     cardOpacity,
@@ -121,6 +169,7 @@ export function PaymentSuccessCelebration({
     haloOne,
     haloTwo,
     medallionScale,
+    journeyProgress,
     reduceMotion,
     visible,
   ]);
@@ -143,6 +192,9 @@ export function PaymentSuccessCelebration({
     opacity: interpolate(haloTwo.value, [0, 0.12, 1], [0, 0.28, 0]),
     transform: [{ scale: interpolate(haloTwo.value, [0, 1], [0.72, 2.3]) }],
   }));
+  const journeyFillStyle = useAnimatedStyle(() => ({
+    width: `${journeyProgress.value * 82}%`,
+  }));
 
   if (!visible) return null;
 
@@ -156,6 +208,7 @@ export function PaymentSuccessCelebration({
     >
       <View accessibilityViewIsModal style={styles.overlay}>
         <Animated.View style={[styles.card, cardStyle]}>
+          <View style={styles.heroPanel}>
           <View style={styles.medallionStage}>
             {!reduceMotion ? (
               <Animated.View
@@ -175,12 +228,20 @@ export function PaymentSuccessCelebration({
                 ))
               : null}
             <Animated.View style={[styles.medallion, medallionStyle]}>
-              <AppIcon color="#FFFFFF" name="paymentSuccessful" size="xl" />
+              <Image
+                resizeMode="contain"
+                source={require("../../assets/images/payment-confirmed-celebration.png")}
+                style={styles.confirmedArtwork}
+              />
             </Animated.View>
+          </View>
           </View>
 
           <Animated.View style={[styles.copy, contentStyle]}>
-            <Text style={styles.eyebrow}>PAYMENT SECURED</Text>
+            <View style={styles.securedPill}>
+              <AppIcon color={brand.colors.light.mint} name="check" size="xs" />
+              <Text style={styles.eyebrow}>PAYMENT SECURED</Text>
+            </View>
             <Text
               accessibilityLiveRegion="polite"
               accessibilityRole="header"
@@ -192,6 +253,25 @@ export function PaymentSuccessCelebration({
               {amount} paid securely. The restaurant can start preparing your
               order.
             </Text>
+            <View
+              accessibilityLabel="Payment complete, order confirmed, preparing next"
+              style={styles.journey}
+            >
+              <View style={styles.journeyRail} />
+              <Animated.View style={[styles.journeyRailFill, journeyFillStyle]} />
+              <View style={styles.journeySteps}>
+                {PAYMENT_STEPS.map((step, index) => (
+                  <PaymentJourneyStep
+                    delay={index * 0.26}
+                    icon={step.icon}
+                    key={step.label}
+                    label={step.label}
+                    progress={journeyProgress}
+                    reduceMotion={reduceMotion}
+                  />
+                ))}
+              </View>
+            </View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Continue to order details"
@@ -224,17 +304,24 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderRadius: 30,
     maxWidth: 360,
-    paddingHorizontal: 28,
-    paddingVertical: 30,
+    overflow: "hidden",
     width: "100%",
     ...brand.shadow,
   },
+  heroPanel: {
+    alignItems: "center",
+    backgroundColor: "#FFF2ED",
+    borderBottomColor: "#F8DDD3",
+    borderBottomWidth: 1,
+    height: 156,
+    justifyContent: "center",
+    width: "100%",
+  },
   medallionStage: {
     alignItems: "center",
-    height: 110,
+    height: 128,
     justifyContent: "center",
-    marginBottom: 14,
-    width: 110,
+    width: 128,
   },
   halo: {
     backgroundColor: "#DFF5ED",
@@ -258,14 +345,21 @@ const styles = StyleSheet.create({
   },
   medallion: {
     alignItems: "center",
-    backgroundColor: brand.colors.light.mint,
-    borderRadius: 40,
-    height: 80,
+    backgroundColor: "transparent",
+    borderRadius: 56,
+    height: 112,
     justifyContent: "center",
-    width: 80,
+    overflow: "hidden",
+    width: 112,
+  },
+  confirmedArtwork: {
+    height: 112,
+    width: 112,
   },
   copy: {
     alignItems: "center",
+    paddingHorizontal: 28,
+    paddingVertical: 24,
     width: "100%",
   },
   eyebrow: {
@@ -273,7 +367,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 1.3,
-    marginBottom: 7,
+    marginBottom: 0,
+  },
+  securedPill: {
+    alignItems: "center",
+    backgroundColor: "#E8F7F1",
+    borderRadius: 999,
+    flexDirection: "row",
+    gap: 5,
+    marginBottom: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   title: {
     color: brand.colors.light.ink,
@@ -286,6 +390,58 @@ const styles = StyleSheet.create({
     color: brand.colors.light.inkMuted,
     fontSize: 15,
     lineHeight: 22,
+    textAlign: "center",
+  },
+  journey: {
+    backgroundColor: "#FFF8F4",
+    borderRadius: 16,
+    marginTop: 20,
+    paddingBottom: 9,
+    paddingTop: 9,
+    paddingHorizontal: 5,
+    position: "relative",
+    width: "100%",
+  },
+  journeyRail: {
+    backgroundColor: "#F1E4DE",
+    borderRadius: 999,
+    height: 3,
+    left: 27,
+    position: "absolute",
+    right: 27,
+    top: 13,
+  },
+  journeyRailFill: {
+    backgroundColor: brand.colors.light.mint,
+    borderRadius: 999,
+    height: 3,
+    left: 27,
+    position: "absolute",
+    top: 13,
+  },
+  journeySteps: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  journeyStep: {
+    alignItems: "center",
+    width: 54,
+  },
+  journeyDot: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.mint,
+    borderColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: 3,
+    height: 28,
+    justifyContent: "center",
+    width: 28,
+  },
+  journeyLabel: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 5,
     textAlign: "center",
   },
   action: {

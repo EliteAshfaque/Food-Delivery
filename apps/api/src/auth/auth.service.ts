@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -147,7 +148,11 @@ export class AuthService {
       .where(eq(user.googleSubject, payload.sub));
 
     if (googleUser) {
-      return this.createGoogleCustomerSession(googleUser);
+      const refreshed = await this.maybeApplyGooglePicture(
+        googleUser,
+        payload.picture,
+      );
+      return this.createGoogleCustomerSession(refreshed);
     }
 
     const normalizedEmail = this.normalizeEmail(payload.email);
@@ -170,7 +175,11 @@ export class AuthService {
       }
 
       const linkedUser = await this.linkGoogleIdentity(emailUser, payload.sub);
-      return this.createGoogleCustomerSession(linkedUser);
+      const withPicture = await this.maybeApplyGooglePicture(
+        linkedUser,
+        payload.picture,
+      );
+      return this.createGoogleCustomerSession(withPicture);
     }
 
     let createdUser: User;
@@ -185,6 +194,7 @@ export class AuthService {
           lastName: this.normalizeGoogleName(payload.family_name, ''),
           email: normalizedEmail,
           googleSubject: payload.sub,
+          imageUrl: this.normalizeOptionalUrl(payload.picture),
           role: UserRole.CUSTOMER,
         })
         .returning();
@@ -215,6 +225,69 @@ export class AuthService {
     }
 
     return { user: this.sanitizeUser(foundUser) };
+  }
+
+  async updateProfile(
+    userId: string,
+    dto: {
+      firstName: string;
+      lastName: string;
+      imageUrl?: string | null;
+    },
+  ) {
+    const patch: {
+      firstName: string;
+      lastName: string;
+      updatedAt: Date;
+      imageUrl?: string | null;
+    } = {
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      updatedAt: new Date(),
+    };
+
+    if (dto.imageUrl !== undefined) {
+      patch.imageUrl = dto.imageUrl;
+    }
+
+    const [updatedUser] = await this.db
+      .update(user)
+      .set(patch)
+      .where(eq(user.id, userId))
+      .returning();
+
+    if (!updatedUser) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    this.assertAccountIsActive(updatedUser);
+    return { user: this.sanitizeUser(updatedUser) };
+  }
+
+  /** Prefer keeping a user-uploaded photo; only fill empty avatars from Google. */
+  private async maybeApplyGooglePicture(
+    dbUser: User,
+    picture: string | undefined,
+  ) {
+    if (dbUser.imageUrl) return dbUser;
+    const imageUrl = this.normalizeOptionalUrl(picture);
+    if (!imageUrl) return dbUser;
+
+    const [updated] = await this.db
+      .update(user)
+      .set({ imageUrl, updatedAt: new Date() })
+      .where(eq(user.id, dbUser.id))
+      .returning();
+
+    return updated ?? dbUser;
+  }
+
+  private normalizeOptionalUrl(value: string | undefined) {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.length > 2048) return null;
+    if (!/^https?:\/\//i.test(trimmed)) return null;
+    return trimmed;
   }
 
   private createGoogleCustomerSession(dbUser: User) {
@@ -307,6 +380,22 @@ export class AuthService {
     const safeUser = this.sanitizeUser(dbUser);
     const token = this.generateToken(safeUser);
     return { user: safeUser, token };
+  }
+
+  async savePushToken(
+    userId: string,
+    token: string,
+    platform: 'android' | 'ios',
+  ) {
+    const normalized = token.trim();
+    if (!normalized) throw new BadRequestException('Push token is required');
+
+    await this.db
+      .update(user)
+      .set({ pushToken: `${platform}:${normalized}`, updatedAt: new Date() })
+      .where(eq(user.id, userId));
+
+    return { ok: true };
   }
 
   private generateToken(

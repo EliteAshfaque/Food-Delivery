@@ -42,10 +42,19 @@ export class UploadAuthorizationService implements UploadAuthorizer {
 
     if (
       !dbUser ||
-      dbUser.role !== UserRole.RESTAURANT_OWNER ||
-      dbUser.accountStatus !== AccountStatus.ACTIVE
+      dbUser.accountStatus !== AccountStatus.ACTIVE ||
+      (dbUser.role !== UserRole.RESTAURANT_OWNER &&
+        dbUser.role !== UserRole.ADMIN)
     ) {
       throw this.forbidden();
+    }
+
+    // Administrators may upload restaurant images for any partner store.
+    if (dbUser.role === UserRole.ADMIN) {
+      return {
+        uploadedBy: dbUser.id,
+        restaurantId: restaurantId ?? null,
+      };
     }
 
     if (restaurantId) {
@@ -78,6 +87,26 @@ export class UploadAuthorizationService implements UploadAuthorizer {
     };
   }
 
+  async requireActiveUser(
+    authorizationHeader: string | undefined,
+  ): Promise<{ uploadedBy: string }> {
+    const payload = this.verifyBearerToken(authorizationHeader);
+
+    const [dbUser] = await this.db
+      .select({
+        id: schema.user.id,
+        accountStatus: schema.user.accountStatus,
+      })
+      .from(schema.user)
+      .where(eq(schema.user.id, payload.sub));
+
+    if (!dbUser || dbUser.accountStatus !== AccountStatus.ACTIVE) {
+      throw this.forbidden('You are not allowed to upload a profile photo');
+    }
+
+    return { uploadedBy: dbUser.id };
+  }
+
   private verifyBearerToken(authorizationHeader: string | undefined) {
     const authParts = authorizationHeader?.trim().split(/\s+/) ?? [];
     const [scheme, token] = authParts;
@@ -95,12 +124,12 @@ export class UploadAuthorizationService implements UploadAuthorizer {
     }
   }
 
-  private forbidden() {
+  private forbidden(message = 'You are not allowed to upload files for this restaurant') {
     // UploadThing maps this error to a 403 response. Do not distinguish an
     // expired token, suspended account, or another owner's restaurant.
     return new UploadThingError({
       code: 'FORBIDDEN',
-      message: 'You are not allowed to upload files for this restaurant',
+      message,
     });
   }
 }

@@ -104,6 +104,21 @@ export default function DriverHomeScreen() {
     },
   });
 
+  const { mutate: acceptOrder, isPending: accepting } = useMutation({
+    mutationFn: (orderId: string) =>
+      api.post(`/driver/orders/${orderId}/accept`).then((res) => res.data),
+    onSuccess: () => {
+      if (pendingOrder) setDismissedIncomingOrderId(pendingOrder.id);
+      clearIncomingOrder();
+      queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
+      router.push('/(driver)/active');
+    },
+    onError: (error) => {
+      Alert.alert('Could not accept delivery', getApiErrorMessage(error));
+      void refetchActive();
+    },
+  });
+
   useEffect(() => {
     if (!incomingOrder?.id) return;
     void refetchActive();
@@ -118,10 +133,8 @@ export default function DriverHomeScreen() {
   const activeOrder = activeOrders[0] ?? null;
 
   function handleAccept() {
-    if (pendingOrder) setDismissedIncomingOrderId(pendingOrder.id);
-    clearIncomingOrder();
-    void refetchActive();
-    router.push('/(driver)/active');
+    if (!pendingOrder) return;
+    acceptOrder(pendingOrder.id);
   }
 
   function handleDecline() {
@@ -281,7 +294,7 @@ export default function DriverHomeScreen() {
               <Pressable
                 style={[styles.modalButton, styles.modalDecline]}
                 onPress={handleDecline}
-                disabled={declining}>
+                disabled={declining || accepting}>
                 {declining ? (
                   <ActivityIndicator color="#DC2626" />
                 ) : (
@@ -291,8 +304,12 @@ export default function DriverHomeScreen() {
               <Pressable
                 style={[styles.modalButton, styles.modalAccept]}
                 onPress={handleAccept}
-                disabled={declining}>
-                <Text style={styles.modalAcceptText}>Accept</Text>
+                disabled={declining || accepting}>
+                {accepting ? (
+                  <ActivityIndicator color="#FFF8F4" />
+                ) : (
+                  <Text style={styles.modalAcceptText}>Accept</Text>
+                )}
               </Pressable>
             </View>
           </View>

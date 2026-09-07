@@ -78,7 +78,7 @@ function LocationPickerDraft({
       const coordinates = await getCoordinatesForAddress(search.trim());
       if (!coordinates) {
         setSearchError(
-          'Location not found. Try “Dubai, UAE” or add more detail. Android needs location permission to search.',
+          'Location not found. Try “Dubai Marina, UAE” or a fuller address. On Android, allow location permission when prompted.',
         );
         return;
       }

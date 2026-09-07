@@ -78,6 +78,7 @@ export const appIcons = {
   refund: "cash-refund",
   invoice: "file-document-outline",
   personalInformation: "card-account-details-outline",
+  camera: "camera-outline",
   addresses: "map-marker-outline",
   addAddress: "map-marker-plus-outline",
   editAddress: "map-marker-radius-outline",

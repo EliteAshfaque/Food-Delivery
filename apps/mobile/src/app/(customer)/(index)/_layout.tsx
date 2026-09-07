@@ -1,25 +1,26 @@
 import { Stack } from 'expo-router';
-import { StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
-import { BottomTabInset } from '@/constants/theme';
+import { brand } from '@/constants/brand';
 
 export default function CustomerHomeLayout() {
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <View style={styles.safe}>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="restaurant/[id]" options={{ gestureEnabled: true }} />
         <Stack.Screen name="oder/[id]" options={{ gestureEnabled: true }} />
+        <Stack.Screen name="addresses" options={{ gestureEnabled: true }} />
       </Stack>
-    </SafeAreaView>
-  ); 
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
   safe: {
+    backgroundColor: brand.colors.light.canvas,
     flex: 1,
-    backgroundColor: '#fff',
-    paddingBottom: BottomTabInset,
+    // Top inset comes from RoleSafeArea in (customer)/_layout.
+    // Bottom inset comes from NativeTabs — do not add BottomTabInset here.
   },
 });

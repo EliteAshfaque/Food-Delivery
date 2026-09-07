@@ -45,4 +45,12 @@ export class DriverController {
   ) {
     return this.driverService.declineOrder(id, req.user.sub);
   }
+
+  @Post('orders/:id/accept')
+  acceptOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: AuthRequest,
+  ) {
+    return this.driverService.acceptOrder(id, req.user.sub);
+  }
 }

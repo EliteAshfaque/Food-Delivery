@@ -7,15 +7,18 @@
   "scripts": {
     "dev:api":"pnpm --filter api run start:dev",
     "dev:mobile": "pnpm --filter mobile exec expo start --ios --port 8084",
+    "dev:admin": "pnpm --filter admin dev",
     "dev":"concurrently \"pnpm  dev:api\" \"pnpm  dev:mobile\"",
     "build:api": "pnpm --filter api build",
+    "build:admin": "pnpm --filter admin build",
     "lint:api": "pnpm --filter api lint",
     "lint:mobile": "pnpm --filter mobile lint",
     "typecheck:mobile": "pnpm --filter mobile exec tsc --noEmit",
+    "typecheck:admin": "pnpm --filter admin typecheck",
     "test:api": "pnpm --filter api test",
     "test:e2e": "pnpm --filter api test:e2e",
     "test": "pnpm run test:api",
-    "verify": "pnpm run build:api && pnpm run lint:api && pnpm run lint:mobile && pnpm run typecheck:mobile && pnpm run test:api"
+    "verify": "pnpm run build:api && pnpm run lint:api && pnpm run lint:mobile && pnpm run typecheck:mobile && pnpm run build:admin && pnpm run test:api"
   },
   "devDependencies": {
     "concurrently": "^10.0.4"

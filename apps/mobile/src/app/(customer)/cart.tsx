@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,12 +10,12 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import * as Location from "expo-location";
+import type { UserAddress } from "@food-delivery/types";
 import { api } from "@/lib/axios";
 import { useCartStore } from "@/store/cart-store";
-import { BottomTabInset } from "@/constants/theme";
 import { brand } from "@/constants/brand";
 import { WasilMark } from "@/components/wasil-brand";
 import { AppIcon } from "@/components/wasil-icon-system";
@@ -45,6 +46,10 @@ type RestaurantOfferValue = {
 };
 
 export default function CustomerCartScreen() {
+  const queryClient = useQueryClient();
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(
+    null,
+  );
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [deliveryCoords, setDeliveryCoords] = useState<{
     latitude: number;
@@ -52,6 +57,9 @@ export default function CustomerCartScreen() {
   } | null>(null);
   const [locating, setLocating] = useState(false);
   const [isMapPickerVisible, setMapPickerVisible] = useState(false);
+  const [isAddressPickerVisible, setAddressPickerVisible] = useState(false);
+  const [isOneTimeMode, setOneTimeMode] = useState(false);
+  const [saveAfterOrder, setSaveAfterOrder] = useState(false);
   const [offerInput, setOfferInput] = useState<RestaurantOfferValue>({
     restaurantId: null,
     value: "",
@@ -71,6 +79,30 @@ export default function CustomerCartScreen() {
     totalPrice,
   } = useCartStore();
   const subtotal = totalPrice();
+
+  const savedAddresses = useQuery({
+    queryKey: ["addresses"],
+    queryFn: () =>
+      api.get<UserAddress[]>("/addresses").then((res) => res.data),
+  });
+
+  useEffect(() => {
+    if (!savedAddresses.data || selectedAddressId || isOneTimeMode) return;
+    const preferred =
+      savedAddresses.data.find((item) => item.isDefault) ??
+      savedAddresses.data[0];
+    if (!preferred) return;
+    setSelectedAddressId(preferred.id);
+    setDeliveryAddress(preferred.addressLine);
+    setDeliveryCoords({
+      latitude: preferred.latitude,
+      longitude: preferred.longitude,
+    });
+  }, [savedAddresses.data, selectedAddressId, isOneTimeMode]);
+
+  const selectedSaved = savedAddresses.data?.find(
+    (item) => item.id === selectedAddressId,
+  );
   // Offers are scoped to the restaurant that was in the cart when they were
   // entered. Deriving the visible value prevents a code from being carried to
   // a replacement cart without an effect that resets form state after render.
@@ -143,6 +175,18 @@ export default function CustomerCartScreen() {
         })),
         offerCode: appliedOfferCode ?? undefined,
       });
+
+      if (saveAfterOrder && isOneTimeMode) {
+        await api.post("/addresses", {
+          label: "Other",
+          addressLine: deliveryAddress.trim(),
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          isDefault: (savedAddresses.data?.length ?? 0) === 0,
+        });
+        await queryClient.invalidateQueries({ queryKey: ["addresses"] });
+      }
+
       return data;
     },
     onSuccess: (order) => {
@@ -156,6 +200,26 @@ export default function CustomerCartScreen() {
       Alert.alert("Order failed", getApiErrorMessage(error));
     },
   });
+
+  function applySavedAddress(address: UserAddress) {
+    setSelectedAddressId(address.id);
+    setDeliveryAddress(address.addressLine);
+    setDeliveryCoords({
+      latitude: address.latitude,
+      longitude: address.longitude,
+    });
+    setOneTimeMode(false);
+    setSaveAfterOrder(false);
+    setAddressPickerVisible(false);
+  }
+
+  function startOneTimeAddress() {
+    setSelectedAddressId(null);
+    setOneTimeMode(true);
+    setDeliveryAddress("");
+    setDeliveryCoords(null);
+    setAddressPickerVisible(false);
+  }
 
   async function captureCurrentLocation() {
     setLocating(true);
@@ -425,79 +489,167 @@ export default function CustomerCartScreen() {
               size="sm"
               color={brand.colors.light.primary}
             />
-            <Text style={styles.label}>Delivery address and map pin</Text>
+            <Text style={styles.label}>Deliver to</Text>
           </View>
-          <TextInput
-            style={styles.input}
-            placeholder="Street, building, apartment..."
-            placeholderTextColor={brand.colors.light.inkMuted}
-            value={deliveryAddress}
-            onChangeText={handleAddressChange}
-            multiline
-            textAlignVertical="top"
-          />
-          <Pressable
-            style={[styles.locationButton, locating && styles.buttonDisabled]}
-            disabled={locating}
-            onPress={() => void captureCurrentLocation()}
-          >
-            {locating ? (
-              <ActivityIndicator color={brand.colors.light.primary} />
-            ) : (
-              <>
-                <AppIcon
-                  name="currentLocation"
-                  size="sm"
-                  color={brand.colors.light.primary}
-                />
-                <Text style={styles.locationButtonText}>
-                  {deliveryCoords ? "Refresh my location" : "Use my location"}
-                </Text>
-              </>
-            )}
-          </Pressable>
-          <Pressable
-            style={styles.mapButton}
-            onPress={() => setMapPickerVisible(true)}
-          >
-            <AppIcon name="map" size="sm" color={brand.colors.light.primary} />
-            <Text style={styles.locationButtonText}>Search or choose delivery pin on map</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.locationButton, locating && styles.buttonDisabled]}
-            disabled={locating}
-            onPress={() => void locateEnteredAddress()}>
-            <AppIcon name="map" size="sm" color={brand.colors.light.primary} />
-            <Text style={styles.locationButtonText}>Locate entered address</Text>
-          </Pressable>
-          {deliveryCoords ? (
-            <Text style={styles.coordsHint}>
-              GPS locked · {deliveryCoords.latitude.toFixed(5)},{" "}
-              {deliveryCoords.longitude.toFixed(5)}
-            </Text>
+
+          {selectedSaved && !isOneTimeMode ? (
+            <View style={styles.savedAddressCard}>
+              <View style={styles.savedAddressTop}>
+                <View style={styles.savedLabelPill}>
+                  <Text style={styles.savedLabelText}>{selectedSaved.label}</Text>
+                </View>
+                {selectedSaved.isDefault ? (
+                  <Text style={styles.defaultBadge}>Default</Text>
+                ) : null}
+              </View>
+              <Text style={styles.savedAddressLine}>
+                {selectedSaved.addressLine}
+              </Text>
+              <View style={styles.savedAddressActions}>
+                <Pressable onPress={() => setAddressPickerVisible(true)}>
+                  <Text style={styles.changeAddressText}>Change</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() =>
+                    router.push("/(customer)/(index)/addresses")
+                  }
+                >
+                  <Text style={styles.manageAddressText}>Manage</Text>
+                </Pressable>
+              </View>
+            </View>
           ) : (
-            <Text style={styles.coordsHint}>
-              Use current GPS, search a city/address on the map, or type an address. The exact pin is shared only with your driver for this order.
-            </Text>
+            <>
+              {(savedAddresses.data?.length ?? 0) > 0 ? (
+                <Pressable
+                  onPress={() => setAddressPickerVisible(true)}
+                  style={styles.pickSavedButton}
+                >
+                  <AppIcon
+                    color={brand.colors.light.primary}
+                    name="addresses"
+                    size="sm"
+                  />
+                  <Text style={styles.locationButtonText}>
+                    Choose a saved address
+                  </Text>
+                </Pressable>
+              ) : null}
+              <TextInput
+                style={styles.input}
+                placeholder="Street, building, apartment..."
+                placeholderTextColor={brand.colors.light.inkMuted}
+                value={deliveryAddress}
+                onChangeText={handleAddressChange}
+                multiline
+                textAlignVertical="top"
+              />
+              <Pressable
+                style={[styles.locationButton, locating && styles.buttonDisabled]}
+                disabled={locating}
+                onPress={() => void captureCurrentLocation()}
+              >
+                {locating ? (
+                  <ActivityIndicator color={brand.colors.light.primary} />
+                ) : (
+                  <>
+                    <AppIcon
+                      name="currentLocation"
+                      size="sm"
+                      color={brand.colors.light.primary}
+                    />
+                    <Text style={styles.locationButtonText}>
+                      {deliveryCoords ? "Refresh my location" : "Use my location"}
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+              <Pressable
+                style={styles.mapButton}
+                onPress={() => setMapPickerVisible(true)}
+              >
+                <AppIcon name="map" size="sm" color={brand.colors.light.primary} />
+                <Text style={styles.locationButtonText}>
+                  Search or choose delivery pin on map
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[styles.locationButton, locating && styles.buttonDisabled]}
+                disabled={locating}
+                onPress={() => void locateEnteredAddress()}
+              >
+                <AppIcon name="map" size="sm" color={brand.colors.light.primary} />
+                <Text style={styles.locationButtonText}>
+                  Locate entered address
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSaveAfterOrder((value) => !value)}
+                style={styles.saveToggle}
+              >
+                <View
+                  style={[
+                    styles.checkbox,
+                    saveAfterOrder && styles.checkboxChecked,
+                  ]}
+                />
+                <Text style={styles.saveToggleText}>
+                  Save this address for next time
+                </Text>
+              </Pressable>
+              {deliveryCoords ? (
+                <Text style={styles.coordsHint}>
+                  GPS locked · {deliveryCoords.latitude.toFixed(5)},{" "}
+                  {deliveryCoords.longitude.toFixed(5)}
+                </Text>
+              ) : (
+                <Text style={styles.coordsHint}>
+                  Use a saved address, current GPS, or drop a map pin. The exact
+                  pin is shared only with your driver for this order.
+                </Text>
+              )}
+            </>
           )}
         </View>
 
-        <View style={styles.summaryRow}>
-          <View>
-            <Text style={styles.summaryLabel}>{totalItems()} items</Text>
-            <Text style={styles.summaryNote}>
-              Payment is confirmed securely in the next step.
+        <View style={styles.billCard}>
+          <Text style={styles.billTitle}>Bill details</Text>
+          <View style={styles.billRow}>
+            <Text style={styles.billLabel}>Item total</Text>
+            <Text style={styles.billValue}>{formatCurrency(subtotal)}</Text>
+          </View>
+          {Number(quotedDiscount) > 0 ? (
+            <View style={styles.billRow}>
+              <Text style={styles.billDiscountLabel}>Offer discount</Text>
+              <Text style={styles.billDiscountValue}>
+                −{formatCurrency(quotedDiscount)}
+              </Text>
+            </View>
+          ) : null}
+          <View style={styles.billRow}>
+            <Text style={styles.billLabel}>Delivery fee</Text>
+            <Text style={styles.billFree}>Free</Text>
+          </View>
+          <View style={styles.billDivider} />
+          <View style={styles.billRow}>
+            <Text style={styles.billTotalLabel}>To pay</Text>
+            <Text style={styles.billTotalValue}>
+              {formatCurrency(quotedTotal)}
             </Text>
-            {Number(quotedDiscount) > 0 ? <Text style={styles.summarySaving}>You save {formatCurrency(quotedDiscount)}</Text> : null}
           </View>
-          <View style={styles.totalCopy}>
-            {Number(quotedDiscount) > 0 ? <Text style={styles.summarySubtotal}>{formatCurrency(subtotal)}</Text> : null}
-            <Text style={styles.summaryTotal}>{formatCurrency(quotedTotal)}</Text>
-          </View>
+          <Text style={styles.billNote}>
+            Payment is confirmed securely on the next screen.
+          </Text>
         </View>
       </ScrollView>
 
       <View style={styles.footer}>
+        <View style={styles.footerTotal}>
+          <Text style={styles.footerTotalLabel}>Total</Text>
+          <Text style={styles.footerTotalValue}>
+            {formatCurrency(quotedTotal)}
+          </Text>
+        </View>
         <Pressable
           style={[
             styles.placeOrderButton,
@@ -509,12 +661,7 @@ export default function CustomerCartScreen() {
           {isPending ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <View style={styles.placeOrderContent}>
-              <AppIcon name="shoppingCart" size="sm" color="#FFFFFF" />
-              <Text style={styles.placeOrderText}>
-                Continue to payment · {formatCurrency(quotedTotal)}
-              </Text>
-            </View>
+            <Text style={styles.placeOrderText}>Continue to payment</Text>
           )}
         </Pressable>
       </View>
@@ -525,6 +672,67 @@ export default function CustomerCartScreen() {
         title="Delivery location"
         visible={isMapPickerVisible}
       />
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setAddressPickerVisible(false)}
+        transparent
+        visible={isAddressPickerVisible}
+      >
+        <View style={styles.pickerOverlay}>
+          <View style={styles.pickerSheet}>
+            <Text style={styles.pickerTitle}>Choose delivery address</Text>
+            <ScrollView>
+              {(savedAddresses.data ?? []).map((address) => (
+                <Pressable
+                  key={address.id}
+                  onPress={() => applySavedAddress(address)}
+                  style={[
+                    styles.pickerOption,
+                    selectedAddressId === address.id &&
+                      styles.pickerOptionSelected,
+                  ]}
+                >
+                  <View style={styles.pickerOptionTop}>
+                    <Text style={styles.pickerOptionLabel}>{address.label}</Text>
+                    {address.isDefault ? (
+                      <Text style={styles.defaultBadge}>Default</Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.pickerOptionLine}>
+                    {address.addressLine}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Pressable
+              onPress={startOneTimeAddress}
+              style={styles.pickerAddButton}
+            >
+              <AppIcon color="#FFFFFF" name="addAddress" size="sm" />
+              <Text style={styles.pickerAddText}>
+                Deliver somewhere else
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                setAddressPickerVisible(false);
+                router.push("/(customer)/(index)/addresses");
+              }}
+              style={styles.pickerManageButton}
+            >
+              <Text style={styles.pickerManageText}>
+                Manage saved addresses
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setAddressPickerVisible(false)}
+              style={styles.pickerClose}
+            >
+              <Text style={styles.pickerCloseText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -543,7 +751,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
-    paddingBottom: BottomTabInset,
+    // The footer is rendered above the customer tab bar; reserving the tab
+    // inset here as well created a large empty Android gap.
+    paddingBottom: 96,
     backgroundColor: brand.colors.light.canvas,
   },
   emptyIcon: {
@@ -592,8 +802,11 @@ const styles = StyleSheet.create({
   },
   checkoutHeader: {
     alignItems: "center",
+    backgroundColor: "#FFF0EA",
+    borderRadius: 20,
     flexDirection: "row",
     marginBottom: 20,
+    padding: 14,
   },
   checkoutTitleBlock: {
     flex: 1,
@@ -618,9 +831,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: brand.colors.light.surface,
     borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.medium,
+    borderRadius: 20,
     borderWidth: 1,
-    padding: 12,
+    padding: 13,
     marginBottom: 12,
     gap: 12,
   },
@@ -821,70 +1034,284 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.7,
   },
-  summaryRow: {
+  billCard: {
+    backgroundColor: "#25192A",
+    borderRadius: 22,
+    marginBottom: 8,
+    padding: 16,
+    ...brand.shadow,
+  },
+  billTitle: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+  billRow: {
+    alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: brand.colors.light.surface,
-    borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.medium,
-    borderWidth: 1,
-    padding: 16,
+    marginTop: 10,
   },
-  summaryLabel: {
-    fontSize: 15,
-    color: brand.colors.light.ink,
-    fontWeight: "800",
+  billLabel: {
+    color: "#D9CDD3",
+    fontSize: 14,
+    fontWeight: "600",
   },
-  summaryNote: {
-    color: brand.colors.light.inkMuted,
-    fontSize: 11,
-    marginTop: 3,
+  billValue: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
   },
-  summaryTotal: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: brand.colors.light.ink,
-  },
-  totalCopy: {
-    alignItems: "flex-end",
-  },
-  summarySubtotal: {
-    color: brand.colors.light.inkMuted,
-    fontSize: 11,
-    textDecorationLine: "line-through",
-  },
-  summarySaving: {
+  billDiscountLabel: {
     color: brand.colors.light.mint,
-    fontSize: 11,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  billDiscountValue: {
+    color: brand.colors.light.mint,
+    fontSize: 14,
     fontWeight: "800",
-    marginTop: 4,
+  },
+  billFree: {
+    color: brand.colors.light.mint,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  billDivider: {
+    backgroundColor: brand.colors.light.border,
+    height: StyleSheet.hairlineWidth,
+    marginTop: 14,
+  },
+  billTotalLabel: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  billTotalValue: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  billNote: {
+    color: "#D9CDD3",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 12,
   },
   footer: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    padding: 16,
-    paddingBottom: 16 + BottomTabInset,
+    alignItems: "center",
     backgroundColor: brand.colors.light.surface,
-    borderTopWidth: 1,
     borderTopColor: brand.colors.light.border,
+    borderTopWidth: 1,
+    bottom: 0,
+    flexDirection: "row",
+    gap: 12,
+    left: 0,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    position: "absolute",
+    right: 0,
+  },
+  footerTotal: {
+    flexShrink: 0,
+  },
+  footerTotalLabel: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  footerTotalValue: {
+    color: brand.colors.light.ink,
+    fontSize: 18,
+    fontWeight: "900",
   },
   placeOrderButton: {
-    backgroundColor: brand.colors.light.primary,
-    borderRadius: brand.radius.medium,
-    paddingVertical: 16,
     alignItems: "center",
+    backgroundColor: brand.colors.light.primary,
+    borderRadius: 14,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 52,
+    paddingHorizontal: 14,
   },
   placeOrderText: {
     color: "#fff",
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: "900",
   },
   placeOrderContent: {
     alignItems: "center",
     flexDirection: "row",
     gap: 7,
+  },
+  savedAddressCard: {
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
+    borderWidth: 1,
+    padding: 14,
+  },
+  savedAddressTop: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 8,
+  },
+  savedLabelPill: {
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: brand.radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  savedLabelText: {
+    color: brand.colors.light.primary,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  defaultBadge: {
+    color: brand.colors.light.mint,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  savedAddressLine: {
+    color: brand.colors.light.ink,
+    fontSize: 15,
+    fontWeight: "600",
+    lineHeight: 21,
+  },
+  savedAddressActions: {
+    flexDirection: "row",
+    gap: 18,
+    marginTop: 12,
+  },
+  changeAddressText: {
+    color: brand.colors.light.primary,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  manageAddressText: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  pickSavedButton: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 10,
+    minHeight: 46,
+    paddingHorizontal: 12,
+  },
+  saveToggle: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+  checkbox: {
+    borderColor: brand.colors.light.border,
+    borderRadius: 6,
+    borderWidth: 2,
+    height: 20,
+    width: 20,
+  },
+  checkboxChecked: {
+    backgroundColor: brand.colors.light.primary,
+    borderColor: brand.colors.light.primary,
+  },
+  saveToggleText: {
+    color: brand.colors.light.ink,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  pickerOverlay: {
+    backgroundColor: "rgba(37, 25, 42, 0.45)",
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  pickerSheet: {
+    backgroundColor: brand.colors.light.canvas,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: "78%",
+    padding: 18,
+    paddingBottom: 28,
+  },
+  pickerTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 18,
+    fontWeight: "900",
+    marginBottom: 14,
+  },
+  pickerOption: {
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
+    borderWidth: 1,
+    marginBottom: 10,
+    padding: 14,
+  },
+  pickerOptionSelected: {
+    borderColor: brand.colors.light.primary,
+  },
+  pickerOptionTop: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 6,
+  },
+  pickerOptionLabel: {
+    color: brand.colors.light.ink,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  pickerOptionLine: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  pickerAddButton: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primary,
+    borderRadius: brand.radius.medium,
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "center",
+    marginTop: 6,
+    minHeight: 48,
+  },
+  pickerAddText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  pickerManageButton: {
+    alignItems: "center",
+    marginTop: 12,
+    minHeight: 40,
+    justifyContent: "center",
+  },
+  pickerManageText: {
+    color: brand.colors.light.primary,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  pickerClose: {
+    alignItems: "center",
+    marginTop: 4,
+    minHeight: 40,
+    justifyContent: "center",
+  },
+  pickerCloseText: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    fontWeight: "700",
   },
 });

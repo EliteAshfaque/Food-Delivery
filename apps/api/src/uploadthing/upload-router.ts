@@ -15,10 +15,14 @@ export interface UploadAuthorizer {
     uploadedBy: string;
     restaurantId: string | null;
   }>;
+  requireActiveUser(authorizationHeader: string | undefined): Promise<{
+    uploadedBy: string;
+  }>;
 }
 
 type RestaurantImageInput = { restaurantId?: string };
 type MenuItemImageInput = { restaurantId: string };
+type ProfileImageInput = Record<string, never>;
 type UploadResult = { url: string };
 
 type TypedUploadRoute<TInput> = FileRoute<{
@@ -30,6 +34,7 @@ type TypedUploadRoute<TInput> = FileRoute<{
 export type UploadRouter = {
   restaurantImage: TypedUploadRoute<RestaurantImageInput>;
   menuItemImage: TypedUploadRoute<MenuItemImageInput>;
+  profileImage: TypedUploadRoute<ProfileImageInput>;
 };
 
 const UUID_PATTERN =
@@ -84,6 +89,19 @@ const menuItemImageInputParser = {
     })),
 };
 
+const profileImageInputParser = {
+  _input: {} as ProfileImageInput,
+  _output: {} as ProfileImageInput,
+  parseAsync: (input: unknown): Promise<ProfileImageInput> =>
+    Promise.resolve().then(() => {
+      const value = parseInputObject(input);
+      if (Object.keys(value).length > 0) {
+        throw new Error('Unexpected upload input');
+      }
+      return {};
+    }),
+};
+
 function getAuthorizationHeader(req: Request): string | undefined {
   const value = req.headers.authorization;
   if (typeof value === 'string') return value;
@@ -127,6 +145,20 @@ export function createUploadRouter(authorizer: UploadAuthorizer): UploadRouter {
           getAuthorizationHeader(req),
           input.restaurantId,
         ),
+      )
+      .onUploadComplete(({ file }) => ({ url: file.ufsUrl })),
+
+    // Any signed-in active account (customer, driver, owner, admin) can set a
+    // profile photo. Ownership is the JWT subject itself.
+    profileImage: f({
+      image: {
+        maxFileSize: '2MB',
+        maxFileCount: 1,
+      },
+    })
+      .input(profileImageInputParser)
+      .middleware(async ({ req }) =>
+        authorizer.requireActiveUser(getAuthorizationHeader(req)),
       )
       .onUploadComplete(({ file }) => ({ url: file.ufsUrl })),
   } satisfies FileRouter;

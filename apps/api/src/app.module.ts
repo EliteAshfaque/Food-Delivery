@@ -15,7 +15,11 @@ import { ReviewsModule } from './reviews/reviews.module';
 import { AdminModule } from './admin/admin.module';
 import { OffersModule } from './offers/offers.module';
 import { UploadthingModule } from './uploadthing/uploadthing.module';
+import { AddressesModule } from './addresses/addresses.module';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { OperationsModule } from './operations/operations.module';
+import { EngagementModule } from './engagement/engagement.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -44,6 +48,10 @@ import { ThrottlerModule } from '@nestjs/throttler';
     AdminModule,
     OffersModule,
     UploadthingModule,
+    AddressesModule,
+    OperationsModule,
+    EngagementModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

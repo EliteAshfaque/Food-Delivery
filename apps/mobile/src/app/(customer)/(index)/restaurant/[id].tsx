@@ -314,46 +314,39 @@ export default function RestaurantDetailScreen() {
             </View>
           </View>
 
-          <Text style={styles.description}>
-            {restaurant.description?.trim() ||
-              "A local favourite, delivered with care."}
-          </Text>
+          {restaurant.description?.trim() ? (
+            <Text numberOfLines={3} style={styles.description}>
+              {restaurant.description.trim()}
+            </Text>
+          ) : null}
 
-          <View style={styles.metaGrid}>
-            <View style={styles.metaItem}>
+          <View style={styles.metaChips}>
+            <View style={styles.metaChip}>
               <AppIcon
                 color={brand.colors.light.primary}
                 name="deliveryTime"
-                size="sm"
+                size="xs"
               />
-              <View>
-                <Text style={styles.metaLabel}>Delivery</Text>
-                <Text style={styles.metaValue}>25–35 min</Text>
-              </View>
+              <Text style={styles.metaChipText}>25–35 min</Text>
             </View>
-            <View style={styles.metaDivider} />
-            <View style={styles.metaItem}>
+            <View style={styles.metaChip}>
               <AppIcon
                 color={brand.colors.light.mint}
                 name="deliveryLocation"
-                size="sm"
+                size="xs"
               />
-              <View>
-                <Text style={styles.metaLabel}>Delivery fee</Text>
-                <Text style={styles.metaValue}>Free</Text>
-              </View>
+              <Text style={styles.metaChipText}>Free delivery</Text>
             </View>
-          </View>
-
-          <View style={styles.addressRow}>
-            <AppIcon
-              color={brand.colors.light.inkMuted}
-              name="location"
-              size="xs"
-            />
-            <Text numberOfLines={1} style={styles.address}>
-              {restaurant.address.trim() || "Delivery available"}
-            </Text>
+            <View style={styles.metaChip}>
+              <AppIcon
+                color={brand.colors.light.inkMuted}
+                name="location"
+                size="xs"
+              />
+              <Text numberOfLines={1} style={styles.metaChipText}>
+                {restaurant.address.trim() || "Nearby"}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -407,15 +400,10 @@ export default function RestaurantDetailScreen() {
         ) : null}
 
         <View style={styles.menuHeader}>
-          <View>
-            <Text style={styles.menuEyebrow}>EXPLORE THE MENU</Text>
-            <Text accessibilityRole="header" style={styles.menuHeading}>
-              Choose your favourites
-            </Text>
-          </View>
-          <View style={styles.menuCountPill}>
-            <Text style={styles.menuCount}>{availableItems.length} items</Text>
-          </View>
+          <Text accessibilityRole="header" style={styles.menuHeading}>
+            Menu
+          </Text>
+          <Text style={styles.menuCount}>{availableItems.length} items</Text>
         </View>
 
         <ScrollView
@@ -496,13 +484,8 @@ export default function RestaurantDetailScreen() {
                   const quantity = getItemQuantity(item.id);
                   return (
                     <View key={item.id} style={styles.menuCard}>
-                      <WasilImage
-                        contentFit="cover"
-                        style={styles.menuImage}
-                        uri={item.imageUrl}
-                      />
                       <View style={styles.menuBody}>
-                        <Text numberOfLines={1} style={styles.menuName}>
+                        <Text numberOfLines={2} style={styles.menuName}>
                           {item.name}
                         </Text>
                         {item.description ? (
@@ -516,66 +499,76 @@ export default function RestaurantDetailScreen() {
                         <Text style={styles.menuPrice}>
                           {formatCurrency(item.price)}
                         </Text>
+
+                        {quantity > 0 ? (
+                          <View
+                            accessibilityLabel={`${quantity} ${item.name} in cart`}
+                            style={styles.qtyControls}
+                          >
+                            <Pressable
+                              accessibilityLabel={`Remove one ${item.name}`}
+                              accessibilityRole="button"
+                              hitSlop={4}
+                              onPress={() => decrementItem(item.id)}
+                              style={({ pressed }) => [
+                                styles.qtyButton,
+                                pressed && styles.pressed,
+                              ]}
+                            >
+                              <AppIcon
+                                color={brand.colors.light.ink}
+                                name="minus"
+                                size="xs"
+                              />
+                            </Pressable>
+                            <Text style={styles.qtyValue}>{quantity}</Text>
+                            <Pressable
+                              accessibilityLabel={`Add one ${item.name}`}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                disabled: !restaurant.isOpen,
+                              }}
+                              disabled={!restaurant.isOpen}
+                              hitSlop={4}
+                              onPress={() => incrementItem(item.id)}
+                              style={({ pressed }) => [
+                                styles.qtyButton,
+                                pressed && restaurant.isOpen && styles.pressed,
+                                !restaurant.isOpen && styles.qtyButtonDisabled,
+                              ]}
+                            >
+                              <AppIcon
+                                color={brand.colors.light.ink}
+                                name="plus"
+                                size="xs"
+                              />
+                            </Pressable>
+                          </View>
+                        ) : (
+                          <Pressable
+                            accessibilityLabel={`Add ${item.name} to cart`}
+                            accessibilityRole="button"
+                            disabled={!restaurant.isOpen}
+                            onPress={() => addToCart(item)}
+                            style={({ pressed }) => [
+                              styles.addButton,
+                              !restaurant.isOpen && styles.addButtonDisabled,
+                              pressed && restaurant.isOpen && styles.pressed,
+                            ]}
+                          >
+                            <AppIcon color="#FFFFFF" name="plus" size="xs" />
+                            <Text style={styles.addButtonText}>Add</Text>
+                          </Pressable>
+                        )}
                       </View>
 
-                      {quantity > 0 ? (
-                        <View
-                          accessibilityLabel={`${quantity} ${item.name} in cart`}
-                          style={styles.qtyControls}
-                        >
-                          <Pressable
-                            accessibilityLabel={`Remove one ${item.name}`}
-                            accessibilityRole="button"
-                            hitSlop={4}
-                            onPress={() => decrementItem(item.id)}
-                            style={({ pressed }) => [
-                              styles.qtyButton,
-                              pressed && styles.pressed,
-                            ]}
-                          >
-                            <AppIcon
-                              color={brand.colors.light.ink}
-                              name="minus"
-                              size="xs"
-                            />
-                          </Pressable>
-                          <Text style={styles.qtyValue}>{quantity}</Text>
-                          <Pressable
-                            accessibilityLabel={`Add one ${item.name}`}
-                            accessibilityRole="button"
-                            accessibilityState={{ disabled: !restaurant.isOpen }}
-                            disabled={!restaurant.isOpen}
-                            hitSlop={4}
-                            onPress={() => incrementItem(item.id)}
-                            style={({ pressed }) => [
-                              styles.qtyButton,
-                              pressed && restaurant.isOpen && styles.pressed,
-                              !restaurant.isOpen && styles.qtyButtonDisabled,
-                            ]}
-                          >
-                            <AppIcon
-                              color={brand.colors.light.ink}
-                              name="plus"
-                              size="xs"
-                            />
-                          </Pressable>
-                        </View>
-                      ) : (
-                        <Pressable
-                          accessibilityLabel={`Add ${item.name} to cart`}
-                          accessibilityRole="button"
-                          disabled={!restaurant.isOpen}
-                          onPress={() => addToCart(item)}
-                          style={({ pressed }) => [
-                            styles.addButton,
-                            !restaurant.isOpen && styles.addButtonDisabled,
-                            pressed && restaurant.isOpen && styles.pressed,
-                          ]}
-                        >
-                          <AppIcon color="#FFFFFF" name="plus" size="xs" />
-                          <Text style={styles.addButtonText}>Add</Text>
-                        </Pressable>
-                      )}
+                      <View style={styles.menuImageWrap}>
+                        <WasilImage
+                          contentFit="cover"
+                          style={styles.menuImage}
+                          uri={item.imageUrl}
+                        />
+                      </View>
                     </View>
                   );
                 })}
@@ -661,11 +654,10 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: { color: "#FFFFFF", fontSize: 15, fontWeight: "900" },
   heroWrap: {
+    aspectRatio: 16 / 10,
     backgroundColor: brand.colors.light.surfaceMuted,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-    height: 252,
     overflow: "hidden",
+    width: "100%",
   },
   heroImage: { height: "100%", width: "100%" },
   heroActions: {
@@ -679,10 +671,8 @@ const styles = StyleSheet.create({
   },
   backButton: {
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.94)",
-    borderColor: "rgba(37,25,42,0.08)",
+    backgroundColor: "rgba(255,255,255,0.96)",
     borderRadius: 22,
-    borderWidth: 1,
     height: 44,
     justifyContent: "center",
     width: 44,
@@ -700,11 +690,9 @@ const styles = StyleSheet.create({
   ratingText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" },
   infoCard: {
     backgroundColor: brand.colors.light.surface,
-    borderColor: brand.colors.light.border,
-    borderRadius: 26,
-    borderWidth: 1,
-    marginHorizontal: 16,
-    marginTop: -26,
+    borderRadius: 28,
+    marginHorizontal: 12,
+    marginTop: -36,
     padding: 18,
     ...brand.shadow,
   },
@@ -717,15 +705,15 @@ const styles = StyleSheet.create({
   titleBlock: { flex: 1 },
   title: {
     color: brand.colors.light.ink,
-    fontSize: 25,
+    fontSize: 26,
     fontWeight: "900",
-    letterSpacing: -0.6,
-    marginBottom: 3,
+    letterSpacing: -0.7,
+    marginBottom: 4,
   },
   cuisine: {
-    color: brand.colors.light.primaryText,
-    fontSize: 13,
-    fontWeight: "900",
+    color: brand.colors.light.inkMuted,
+    fontSize: 14,
+    fontWeight: "700",
   },
   statusBadge: {
     alignItems: "center",
@@ -749,53 +737,36 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     marginTop: 12,
   },
-  metaGrid: {
+  metaChips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 16,
+  },
+  metaChip: {
     alignItems: "center",
     backgroundColor: brand.colors.light.canvas,
-    borderRadius: brand.radius.medium,
-    flexDirection: "row",
-    marginTop: 16,
-    minHeight: 64,
-    paddingHorizontal: 12,
-  },
-  metaItem: { alignItems: "center", flex: 1, flexDirection: "row", gap: 8 },
-  metaDivider: {
-    backgroundColor: brand.colors.light.border,
-    height: 32,
-    width: 1,
-  },
-  metaLabel: {
-    color: brand.colors.light.inkMuted,
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  metaValue: {
-    color: brand.colors.light.ink,
-    fontSize: 13,
-    fontWeight: "900",
-    marginTop: 1,
-  },
-  addressRow: {
-    alignItems: "center",
+    borderRadius: brand.radius.pill,
     flexDirection: "row",
     gap: 6,
-    marginTop: 14,
+    maxWidth: "100%",
+    paddingHorizontal: 11,
+    paddingVertical: 8,
   },
-  address: {
-    color: brand.colors.light.inkMuted,
-    flex: 1,
+  metaChipText: {
+    color: brand.colors.light.ink,
+    flexShrink: 1,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   reviewsCard: {
     backgroundColor: brand.colors.light.surface,
-    borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.large,
-    borderWidth: 1,
-    marginHorizontal: 16,
-    marginTop: 18,
+    borderRadius: 22,
+    marginHorizontal: 12,
+    marginTop: 16,
     padding: 16,
     gap: 12,
+    ...brand.shadow,
   },
   reviewsHeader: {
     alignItems: "center",
@@ -844,36 +815,23 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   menuHeader: {
-    alignItems: "center",
+    alignItems: "baseline",
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 13,
+    marginBottom: 12,
     marginTop: 28,
     paddingHorizontal: 16,
   },
-  menuEyebrow: {
-    color: brand.colors.light.primaryText,
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 1.15,
-    marginBottom: 4,
-  },
   menuHeading: {
     color: brand.colors.light.ink,
-    fontSize: 21,
+    fontSize: 22,
     fontWeight: "900",
     letterSpacing: -0.4,
   },
-  menuCountPill: {
-    backgroundColor: brand.colors.light.primarySoft,
-    borderRadius: brand.radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
   menuCount: {
-    color: brand.colors.light.primaryText,
-    fontSize: 12,
-    fontWeight: "900",
+    color: brand.colors.light.inkMuted,
+    fontSize: 13,
+    fontWeight: "700",
   },
   categoryRow: { gap: 8, paddingHorizontal: 16, paddingRight: 28 },
   categoryChip: {
@@ -886,8 +844,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   categoryChipActive: {
-    backgroundColor: brand.colors.light.ink,
-    borderColor: brand.colors.light.ink,
+    backgroundColor: brand.colors.light.primary,
+    borderColor: brand.colors.light.primary,
   },
   categoryChipText: {
     color: brand.colors.light.inkMuted,
@@ -895,69 +853,84 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   categoryChipTextActive: { color: "#FFFFFF" },
-  menuContent: { paddingHorizontal: 16, paddingTop: 20 },
+  menuContent: { paddingHorizontal: 16, paddingTop: 18 },
   section: { marginBottom: 8 },
   sectionTitle: {
     color: brand.colors.light.ink,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "900",
-    marginBottom: 10,
+    marginBottom: 12,
+    marginTop: 4,
   },
   menuCard: {
-    alignItems: "center",
+    alignItems: "flex-start",
     backgroundColor: brand.colors.light.surface,
-    borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.large,
-    borderWidth: 1,
+    borderRadius: 20,
     flexDirection: "row",
-    gap: 12,
+    gap: 14,
     marginBottom: 12,
-    minHeight: 104,
-    padding: 10,
+    minHeight: 120,
+    padding: 12,
     ...brand.shadow,
   },
-  menuImage: { borderRadius: 16, height: 82, width: 82 },
-  menuBody: { alignSelf: "stretch", flex: 1, justifyContent: "center" },
+  menuBody: {
+    flex: 1,
+    justifyContent: "space-between",
+    minHeight: 96,
+    paddingVertical: 2,
+  },
   menuName: {
     color: brand.colors.light.ink,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "900",
+    letterSpacing: -0.2,
     marginBottom: 4,
   },
   menuDescription: {
     color: brand.colors.light.inkMuted,
-    fontSize: 12,
-    lineHeight: 16,
-    marginBottom: 6,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 8,
   },
   menuPrice: {
-    color: brand.colors.light.primaryText,
-    fontSize: 14,
+    color: brand.colors.light.ink,
+    fontSize: 15,
     fontWeight: "900",
+    marginBottom: 10,
   },
+  menuImageWrap: {
+    backgroundColor: brand.colors.light.surfaceMuted,
+    borderRadius: 16,
+    height: 104,
+    overflow: "hidden",
+    width: 104,
+  },
+  menuImage: { height: "100%", width: "100%" },
   addButton: {
     alignItems: "center",
-    backgroundColor: brand.colors.light.ink,
-    borderRadius: 14,
+    alignSelf: "flex-start",
+    backgroundColor: brand.colors.light.primary,
+    borderRadius: brand.radius.pill,
     flexDirection: "row",
-    gap: 3,
+    gap: 4,
     justifyContent: "center",
-    minHeight: 38,
-    paddingHorizontal: 10,
+    minHeight: 34,
+    paddingHorizontal: 12,
   },
   addButtonDisabled: { backgroundColor: brand.colors.light.border },
   addButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
   qtyControls: {
     alignItems: "center",
+    alignSelf: "flex-start",
     backgroundColor: brand.colors.light.primarySoft,
-    borderRadius: 14,
+    borderRadius: brand.radius.pill,
     flexDirection: "row",
-    minHeight: 38,
-    paddingHorizontal: 3,
+    minHeight: 34,
+    paddingHorizontal: 4,
   },
   qtyButton: {
     alignItems: "center",
-    height: 32,
+    height: 30,
     justifyContent: "center",
     width: 28,
   },

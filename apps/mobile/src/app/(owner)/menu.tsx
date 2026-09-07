@@ -18,7 +18,6 @@ import {
 } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "@/lib/axios";
 import { RequestErrorState } from "@/components/request-error-state";
 import { getApiErrorMessage } from "@/lib/api-error";
@@ -426,17 +425,17 @@ export default function OwnerMenuScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
+      <View style={styles.safe}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#FF6B35" />
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (isInitialRequestError) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
+      <View style={styles.safe}>
         <RequestErrorState
           error={requestError}
           onRetry={() => {
@@ -446,13 +445,13 @@ export default function OwnerMenuScreen() {
           }}
           title="Couldn’t load your menu"
         />
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!restaurant) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
+      <View style={styles.safe}>
         <View style={styles.centered}>
           <Text style={styles.emptyTitle}>Create a restaurant first</Text>
           <Text style={styles.emptyText}>
@@ -465,12 +464,12 @@ export default function OwnerMenuScreen() {
             <Text style={styles.primaryButtonText}>Create restaurant</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <View style={styles.safe}>
       <View style={styles.container}>
         <View style={styles.header}>
           <View>
@@ -776,7 +775,7 @@ export default function OwnerMenuScreen() {
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 

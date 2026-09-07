@@ -80,6 +80,15 @@ export class OffersService {
 
   async create(ownerId: string, dto: CreateOfferDto) {
     const restaurant = await this.getRestaurantForOwner(ownerId);
+    return this.createForRestaurant(restaurant.id, dto);
+  }
+
+  /** Shared create path used by owners and administrators. */
+  async createForRestaurant(
+    restaurantId: string,
+    dto: CreateOfferDto,
+    options?: { isFeatured?: boolean; sortOrder?: number },
+  ) {
     const values = this.normaliseCreateValues(dto);
 
     this.assertOfferRules(values);
@@ -89,8 +98,10 @@ export class OffersService {
     const [offer] = await this.db
       .insert(schema.offers)
       .values({
-        restaurantId: restaurant.id,
+        restaurantId,
         ...values,
+        isFeatured: options?.isFeatured ?? false,
+        sortOrder: options?.sortOrder ?? 0,
         status: this.getScheduleStatus(values.startsAt, values.endsAt, now),
       })
       .returning();

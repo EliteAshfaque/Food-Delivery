@@ -13,8 +13,8 @@ import { AdminHeader, formatAdminDateTime, humanize } from '@/features/admin/com
 import type { AdminAuditLog, AdminDashboard, Paginated } from '@/features/admin/types';
 
 type Shortcut = {
-  href: '/(admin)/users' | '/(admin)/restaurants' | '/(admin)/orders' | '/(admin)/offers';
-  icon: 'profile' | 'restaurant' | 'orders' | 'coupon';
+  href: '/(admin)/users' | '/(admin)/restaurants' | '/(admin)/orders' | '/(admin)/offers' | '/(admin)/notifications';
+  icon: 'profile' | 'restaurant' | 'orders' | 'coupon' | 'notifications';
   label: string;
   detail: string;
 };
@@ -24,6 +24,7 @@ const shortcuts: Shortcut[] = [
   { href: '/(admin)/restaurants', icon: 'restaurant', label: 'Restaurants', detail: 'Moderate partner stores' },
   { href: '/(admin)/orders', icon: 'orders', label: 'Orders', detail: 'Monitor live operations' },
   { href: '/(admin)/offers', icon: 'coupon', label: 'Offers', detail: 'Curate campaigns' },
+  { href: '/(admin)/notifications', icon: 'notifications', label: 'Notifications', detail: 'Review delivery updates' },
 ];
 
 export default function AdminDashboardScreen() {

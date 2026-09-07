@@ -212,9 +212,9 @@ export function OrderReviewCard({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: brand.colors.light.surface,
+    backgroundColor: "#FFF8F4",
     borderColor: brand.colors.light.border,
-    borderRadius: brand.radius.large,
+    borderRadius: 22,
     borderWidth: 1,
     gap: 14,
     marginBottom: 16,

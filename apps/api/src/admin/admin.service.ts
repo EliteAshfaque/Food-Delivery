@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
 import {
   and,
   asc,
@@ -12,6 +13,7 @@ import {
   eq,
   ilike,
   inArray,
+  ne,
   or,
   sql,
   type SQL,
@@ -25,18 +27,27 @@ import {
 } from '@food-delivery/types';
 import { schema } from '../db/relations';
 import * as tables from '../db/schema';
+import { isPostgresUniqueViolation } from '../db/is-unique-violation';
 import { DriverService } from '../driver/driver.service';
 import { OrdersGateway } from '../gateway/orders.gateway';
 import { OffersService } from '../offers/offers.service';
 import { PaymentsService } from '../payments/payment.service';
+import { CreateAdminCategoryDto } from './dto/create-admin-category.dto';
+import { CreateAdminMenuItemDto } from './dto/create-admin-menu-item.dto';
+import { CreateAdminOfferDto } from './dto/create-admin-offer.dto';
+import { CreateAdminRestaurantDto } from './dto/create-admin-restaurant.dto';
+import { CreateAdminUserDto } from './dto/create-admin-user.dto';
 import { ListAdminOffersQueryDto } from './dto/list-admin-offers-query.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import { ListRestaurantsQueryDto } from './dto/list-restaurants-query.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
+import { UpdateAdminCategoryDto } from './dto/update-admin-category.dto';
+import { UpdateAdminMenuItemDto } from './dto/update-admin-menu-item.dto';
 import { UpdateAdminOrderStatusDto } from './dto/update-admin-order-status.dto';
-import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import { UpdateAdminOfferDto } from './dto/update-admin-offer.dto';
+import { UpdateAdminRestaurantDto } from './dto/update-admin-restaurant.dto';
+import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import { UpdateRestaurantModerationDto } from './dto/update-restaurant-moderation.dto';
 
 type Pagination = Pick<PaginationQueryDto, 'page' | 'pageSize'>;
@@ -168,6 +179,548 @@ export class AdminService {
     ]);
 
     return this.paginated(items, query, total);
+  }
+
+  async createUser(actorId: string, dto: CreateAdminUserDto) {
+    const email = dto.email.trim().toLowerCase();
+    const [existing] = await this.db
+      .select({ id: tables.user.id })
+      .from(tables.user)
+      .where(sql`lower(${tables.user.email}) = ${email}`);
+    if (existing) throw new ConflictException('Email already exists');
+
+    const activateImmediately = dto.activateImmediately === true;
+    const accountStatus =
+      dto.accountStatus ??
+      (activateImmediately || dto.role === UserRole.CUSTOMER
+        ? AccountStatus.ACTIVE
+        : dto.role === UserRole.ADMIN
+          ? AccountStatus.ACTIVE
+          : AccountStatus.PENDING_APPROVAL);
+
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
+    let created: typeof tables.user.$inferSelect;
+    try {
+      [created] = await this.db
+        .insert(tables.user)
+        .values({
+          firstName: dto.firstName.trim(),
+          lastName: dto.lastName.trim(),
+          email,
+          password: hashedPassword,
+          role: dto.role,
+          accountStatus,
+          accountStatusReason: activateImmediately
+            ? 'Created and activated by administrator'
+            : null,
+          accountStatusUpdatedAt: new Date(),
+          isOnline: false,
+        })
+        .returning();
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        throw new ConflictException('Email already exists');
+      }
+      throw error;
+    }
+
+    await this.recordAudit(actorId, 'USER_CREATED', 'USER', created.id, {
+      role: created.role,
+      accountStatus: created.accountStatus,
+      email: created.email,
+    });
+
+    const {
+      password: _password,
+      googleSubject: _g,
+      pushToken: _p,
+      ...safe
+    } = created;
+    void _password;
+    void _g;
+    void _p;
+    return safe;
+  }
+
+  async createRestaurant(actorId: string, dto: CreateAdminRestaurantDto) {
+    if ((dto.latitude == null) !== (dto.longitude == null)) {
+      throw new BadRequestException(
+        'Provide both latitude and longitude, or neither',
+      );
+    }
+
+    const [owner] = await this.db
+      .select()
+      .from(tables.user)
+      .where(eq(tables.user.id, dto.ownerId));
+    if (!owner) throw new NotFoundException('Owner account not found');
+    if (owner.role !== UserRole.RESTAURANT_OWNER) {
+      throw new BadRequestException(
+        'Restaurants can only be attached to restaurant owner accounts',
+      );
+    }
+    if (owner.accountStatus !== AccountStatus.ACTIVE) {
+      throw new BadRequestException(
+        'Activate the restaurant owner account before creating their restaurant',
+      );
+    }
+
+    const [existing] = await this.db
+      .select({ id: tables.restaurants.id })
+      .from(tables.restaurants)
+      .where(eq(tables.restaurants.ownerId, dto.ownerId))
+      .limit(1);
+    if (existing) {
+      throw new ConflictException('This owner already has a restaurant');
+    }
+
+    const approveImmediately = dto.approveImmediately !== false;
+    const now = new Date();
+    let restaurant: typeof tables.restaurants.$inferSelect;
+    try {
+      [restaurant] = await this.db
+        .insert(tables.restaurants)
+        .values({
+          ownerId: dto.ownerId,
+          name: dto.name.trim(),
+          description: dto.description?.trim() || null,
+          address: dto.address.trim(),
+          latitude: dto.latitude ?? null,
+          longitude: dto.longitude ?? null,
+          cuisineType: dto.cuisineType.trim(),
+          imageUrl: dto.imageUrl?.trim() || null,
+          moderationStatus: approveImmediately
+            ? RestaurantModerationStatus.APPROVED
+            : RestaurantModerationStatus.PENDING_APPROVAL,
+          moderationNote: approveImmediately
+            ? 'Created and approved by administrator'
+            : null,
+          moderatedAt: approveImmediately ? now : null,
+          moderatedBy: approveImmediately ? actorId : null,
+          isOpen: false,
+        })
+        .returning();
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        throw new ConflictException('This owner already has a restaurant');
+      }
+      throw error;
+    }
+
+    await this.recordAudit(
+      actorId,
+      'RESTAURANT_CREATED',
+      'RESTAURANT',
+      restaurant.id,
+      {
+        ownerId: restaurant.ownerId,
+        moderationStatus: restaurant.moderationStatus,
+        name: restaurant.name,
+      },
+    );
+
+    return restaurant;
+  }
+
+  async updateRestaurant(
+    restaurantId: string,
+    actorId: string,
+    dto: UpdateAdminRestaurantDto,
+  ) {
+    const [existing] = await this.db
+      .select()
+      .from(tables.restaurants)
+      .where(eq(tables.restaurants.id, restaurantId));
+    if (!existing) throw new NotFoundException('Restaurant not found');
+
+    if (
+      (dto.latitude !== undefined && dto.longitude === undefined) ||
+      (dto.longitude !== undefined && dto.latitude === undefined)
+    ) {
+      throw new BadRequestException(
+        'Provide both latitude and longitude together',
+      );
+    }
+
+    const [restaurant] = await this.db
+      .update(tables.restaurants)
+      .set({
+        name: dto.name?.trim() ?? existing.name,
+        description:
+          dto.description === undefined
+            ? existing.description
+            : dto.description?.trim() || null,
+        address: dto.address?.trim() ?? existing.address,
+        latitude: dto.latitude === undefined ? existing.latitude : dto.latitude,
+        longitude:
+          dto.longitude === undefined ? existing.longitude : dto.longitude,
+        cuisineType: dto.cuisineType?.trim() ?? existing.cuisineType,
+        imageUrl:
+          dto.imageUrl === undefined
+            ? existing.imageUrl
+            : dto.imageUrl?.trim() || null,
+        isOpen: dto.isOpen ?? existing.isOpen,
+        updatedAt: new Date(),
+      })
+      .where(eq(tables.restaurants.id, restaurantId))
+      .returning();
+
+    await this.recordAudit(
+      actorId,
+      'RESTAURANT_UPDATED',
+      'RESTAURANT',
+      restaurantId,
+      { fields: Object.keys(dto) },
+    );
+
+    return restaurant;
+  }
+
+  async listRestaurantCategories(restaurantId: string) {
+    await this.requireRestaurant(restaurantId);
+    return this.db
+      .select()
+      .from(tables.menuCategories)
+      .where(eq(tables.menuCategories.restaurantId, restaurantId))
+      .orderBy(asc(tables.menuCategories.name));
+  }
+
+  async createRestaurantCategory(
+    restaurantId: string,
+    actorId: string,
+    dto: CreateAdminCategoryDto,
+  ) {
+    await this.requireRestaurant(restaurantId);
+
+    const [existing] = await this.db
+      .select({ id: tables.menuCategories.id })
+      .from(tables.menuCategories)
+      .where(
+        and(
+          eq(tables.menuCategories.restaurantId, restaurantId),
+          sql`lower(${tables.menuCategories.name}) = ${dto.name.toLowerCase()}`,
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      throw new ConflictException('A category with this name already exists');
+    }
+
+    let category: typeof tables.menuCategories.$inferSelect;
+    try {
+      [category] = await this.db
+        .insert(tables.menuCategories)
+        .values({ restaurantId, name: dto.name })
+        .returning();
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        throw new ConflictException('A category with this name already exists');
+      }
+      throw error;
+    }
+
+    await this.recordAudit(
+      actorId,
+      'MENU_CATEGORY_CREATED',
+      'MENU_CATEGORY',
+      category.id,
+      { restaurantId, name: category.name },
+    );
+
+    return category;
+  }
+
+  async updateRestaurantCategory(
+    restaurantId: string,
+    categoryId: string,
+    actorId: string,
+    dto: UpdateAdminCategoryDto,
+  ) {
+    const category = await this.requireCategoryForRestaurant(
+      restaurantId,
+      categoryId,
+    );
+
+    const [duplicate] = await this.db
+      .select({ id: tables.menuCategories.id })
+      .from(tables.menuCategories)
+      .where(
+        and(
+          eq(tables.menuCategories.restaurantId, restaurantId),
+          sql`lower(${tables.menuCategories.name}) = ${dto.name.toLowerCase()}`,
+          ne(tables.menuCategories.id, categoryId),
+        ),
+      )
+      .limit(1);
+    if (duplicate) {
+      throw new ConflictException('A category with this name already exists');
+    }
+
+    let updated: typeof tables.menuCategories.$inferSelect;
+    try {
+      [updated] = await this.db
+        .update(tables.menuCategories)
+        .set({ name: dto.name })
+        .where(eq(tables.menuCategories.id, categoryId))
+        .returning();
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        throw new ConflictException('A category with this name already exists');
+      }
+      throw error;
+    }
+
+    await this.recordAudit(
+      actorId,
+      'MENU_CATEGORY_UPDATED',
+      'MENU_CATEGORY',
+      categoryId,
+      { restaurantId, from: category.name, to: updated.name },
+    );
+
+    return updated;
+  }
+
+  async deleteRestaurantCategory(
+    restaurantId: string,
+    categoryId: string,
+    actorId: string,
+  ) {
+    const category = await this.requireCategoryForRestaurant(
+      restaurantId,
+      categoryId,
+    );
+
+    const [item] = await this.db
+      .select({ id: tables.menuItems.id })
+      .from(tables.menuItems)
+      .where(eq(tables.menuItems.categoryId, categoryId))
+      .limit(1);
+    if (item) {
+      throw new ConflictException(
+        'This category still has menu items. Move or remove them first.',
+      );
+    }
+
+    await this.db
+      .delete(tables.menuCategories)
+      .where(eq(tables.menuCategories.id, categoryId));
+
+    await this.recordAudit(
+      actorId,
+      'MENU_CATEGORY_DELETED',
+      'MENU_CATEGORY',
+      categoryId,
+      { restaurantId, name: category.name },
+    );
+
+    return { message: 'Category deleted successfully' };
+  }
+
+  async listRestaurantMenuItems(restaurantId: string) {
+    await this.requireRestaurant(restaurantId);
+    return this.db
+      .select()
+      .from(tables.menuItems)
+      .where(eq(tables.menuItems.restaurantId, restaurantId))
+      .orderBy(asc(tables.menuItems.name));
+  }
+
+  async createRestaurantMenuItem(
+    restaurantId: string,
+    actorId: string,
+    dto: CreateAdminMenuItemDto,
+  ) {
+    await this.requireCategoryForRestaurant(restaurantId, dto.categoryId);
+    this.assertPositiveMenuPrice(dto.price);
+
+    const [item] = await this.db
+      .insert(tables.menuItems)
+      .values({
+        restaurantId,
+        categoryId: dto.categoryId,
+        name: dto.name.trim(),
+        description: dto.description?.trim() || null,
+        price: dto.price,
+        imageUrl: dto.imageUrl?.trim() || null,
+      })
+      .returning();
+
+    await this.recordAudit(actorId, 'MENU_ITEM_CREATED', 'MENU_ITEM', item.id, {
+      restaurantId,
+      categoryId: item.categoryId,
+      name: item.name,
+    });
+
+    return item;
+  }
+
+  async updateRestaurantMenuItem(
+    restaurantId: string,
+    itemId: string,
+    actorId: string,
+    dto: UpdateAdminMenuItemDto,
+  ) {
+    const existing = await this.requireMenuItemForRestaurant(
+      restaurantId,
+      itemId,
+    );
+
+    if (
+      dto.categoryId === undefined &&
+      dto.name === undefined &&
+      dto.description === undefined &&
+      dto.price === undefined &&
+      dto.imageUrl === undefined &&
+      dto.isAvailable === undefined
+    ) {
+      throw new BadRequestException(
+        'Provide at least one item field to update',
+      );
+    }
+
+    if (dto.categoryId) {
+      await this.requireCategoryForRestaurant(restaurantId, dto.categoryId);
+    }
+    if (dto.price !== undefined) this.assertPositiveMenuPrice(dto.price);
+
+    const [updated] = await this.db
+      .update(tables.menuItems)
+      .set({
+        categoryId: dto.categoryId ?? existing.categoryId,
+        name: dto.name?.trim() ?? existing.name,
+        description:
+          dto.description === undefined
+            ? existing.description
+            : dto.description?.trim() || null,
+        price: dto.price ?? existing.price,
+        imageUrl:
+          dto.imageUrl === undefined
+            ? existing.imageUrl
+            : dto.imageUrl?.trim() || null,
+        isAvailable: dto.isAvailable ?? existing.isAvailable,
+        updatedAt: new Date(),
+      })
+      .where(eq(tables.menuItems.id, itemId))
+      .returning();
+
+    await this.recordAudit(actorId, 'MENU_ITEM_UPDATED', 'MENU_ITEM', itemId, {
+      restaurantId,
+      fields: Object.keys(dto),
+    });
+
+    return updated;
+  }
+
+  async deleteRestaurantMenuItem(
+    restaurantId: string,
+    itemId: string,
+    actorId: string,
+  ) {
+    const existing = await this.requireMenuItemForRestaurant(
+      restaurantId,
+      itemId,
+    );
+
+    const [orderedItem] = await this.db
+      .select({ id: tables.orderItems.id })
+      .from(tables.orderItems)
+      .where(eq(tables.orderItems.menuItemId, itemId))
+      .limit(1);
+    if (orderedItem) {
+      throw new ConflictException(
+        'This menu item appears in an order. Mark it unavailable instead.',
+      );
+    }
+
+    await this.db
+      .delete(tables.menuItems)
+      .where(eq(tables.menuItems.id, itemId));
+
+    await this.recordAudit(actorId, 'MENU_ITEM_DELETED', 'MENU_ITEM', itemId, {
+      restaurantId,
+      name: existing.name,
+    });
+
+    return { message: 'Item deleted' };
+  }
+
+  async createOffer(actorId: string, dto: CreateAdminOfferDto) {
+    const [restaurant] = await this.db
+      .select({
+        id: tables.restaurants.id,
+        moderationStatus: tables.restaurants.moderationStatus,
+      })
+      .from(tables.restaurants)
+      .where(eq(tables.restaurants.id, dto.restaurantId));
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+    if (restaurant.moderationStatus !== RestaurantModerationStatus.APPROVED) {
+      throw new BadRequestException(
+        'Approve the restaurant before creating offers for it',
+      );
+    }
+
+    const { restaurantId, isFeatured, sortOrder, ...offerFields } = dto;
+    const offer = await this.offersService.createForRestaurant(
+      restaurantId,
+      offerFields,
+      { isFeatured, sortOrder },
+    );
+
+    await this.recordAudit(actorId, 'OFFER_CREATED', 'OFFER', offer.id, {
+      restaurantId,
+      title: offer.title,
+      isFeatured: offer.isFeatured,
+    });
+
+    return offer;
+  }
+
+  async listOfferRedemptions(offerId: string, query: PaginationQueryDto) {
+    const [offer] = await this.db
+      .select({ id: tables.offers.id, title: tables.offers.title })
+      .from(tables.offers)
+      .where(eq(tables.offers.id, offerId));
+    if (!offer) throw new NotFoundException('Offer not found');
+
+    const where = eq(tables.offerRedemptions.offerId, offerId);
+    const [rows, countResult] = await Promise.all([
+      this.db
+        .select({
+          id: tables.offerRedemptions.id,
+          orderId: tables.offerRedemptions.orderId,
+          discountAmount: tables.offerRedemptions.discountAmount,
+          status: tables.offerRedemptions.status,
+          expiresAt: tables.offerRedemptions.expiresAt,
+          redeemedAt: tables.offerRedemptions.redeemedAt,
+          releasedAt: tables.offerRedemptions.releasedAt,
+          createdAt: tables.offerRedemptions.createdAt,
+          customer: {
+            id: tables.user.id,
+            firstName: tables.user.firstName,
+            lastName: tables.user.lastName,
+            email: tables.user.email,
+          },
+        })
+        .from(tables.offerRedemptions)
+        .innerJoin(
+          tables.user,
+          eq(tables.offerRedemptions.customerId, tables.user.id),
+        )
+        .where(where)
+        .orderBy(desc(tables.offerRedemptions.createdAt))
+        .limit(query.pageSize)
+        .offset((query.page - 1) * query.pageSize),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(tables.offerRedemptions)
+        .where(where),
+    ]);
+
+    return {
+      offer,
+      ...this.paginated(rows, query, Number(countResult[0]?.total ?? 0)),
+    };
   }
 
   async updateUser(
@@ -681,10 +1234,54 @@ export class AdminService {
       return order;
     }
 
+    const [normalizedReason] = dto.cancellationReasonId
+      ? await this.db
+          .select()
+          .from(tables.cancellationReasons)
+          .where(
+            and(
+              eq(tables.cancellationReasons.id, dto.cancellationReasonId),
+              eq(tables.cancellationReasons.isActive, true),
+            ),
+          )
+      : [undefined];
+    if (dto.cancellationReasonId) {
+      if (!normalizedReason) {
+        throw new BadRequestException('Cancellation reason is not available');
+      }
+    }
+
     const updated = await this.paymentsService.cancelAndRefundOrder(
       orderId,
       dto.reason.trim(),
     );
+    if (normalizedReason) {
+      await this.db
+        .insert(tables.orderCancellations)
+        .values({
+          orderId,
+          reasonId: normalizedReason.id,
+          actorId,
+          note: dto.reason.trim(),
+        })
+        .onConflictDoUpdate({
+          target: tables.orderCancellations.orderId,
+          set: {
+            reasonId: normalizedReason.id,
+            actorId,
+            note: dto.reason.trim(),
+          },
+        });
+    }
+    await this.db.insert(tables.orderEvents).values({
+      orderId,
+      actorId,
+      type: 'ADMIN_ORDER_CANCELLED',
+      metadata: {
+        reason: dto.reason.trim(),
+        cancellationReasonId: dto.cancellationReasonId ?? null,
+      },
+    });
     await this.recordAudit(actorId, 'ORDER_CANCELLED', 'ORDER', orderId, {
       previousStatus: order.status,
       reason: dto.reason?.trim() || null,
@@ -927,6 +1524,61 @@ export class AdminService {
     if (offer.endsAt <= now) return 'EXPIRED';
     if (offer.startsAt > now) return 'SCHEDULED';
     return 'ACTIVE';
+  }
+
+  private async requireRestaurant(restaurantId: string) {
+    const [restaurant] = await this.db
+      .select({ id: tables.restaurants.id, name: tables.restaurants.name })
+      .from(tables.restaurants)
+      .where(eq(tables.restaurants.id, restaurantId))
+      .limit(1);
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+    return restaurant;
+  }
+
+  private async requireCategoryForRestaurant(
+    restaurantId: string,
+    categoryId: string,
+  ) {
+    await this.requireRestaurant(restaurantId);
+    const [category] = await this.db
+      .select()
+      .from(tables.menuCategories)
+      .where(eq(tables.menuCategories.id, categoryId))
+      .limit(1);
+    if (!category) throw new NotFoundException('Category not found');
+    if (category.restaurantId !== restaurantId) {
+      throw new BadRequestException(
+        'This category does not belong to the selected restaurant',
+      );
+    }
+    return category;
+  }
+
+  private async requireMenuItemForRestaurant(
+    restaurantId: string,
+    itemId: string,
+  ) {
+    await this.requireRestaurant(restaurantId);
+    const [item] = await this.db
+      .select()
+      .from(tables.menuItems)
+      .where(eq(tables.menuItems.id, itemId))
+      .limit(1);
+    if (!item) throw new NotFoundException('Menu item not found');
+    if (item.restaurantId !== restaurantId) {
+      throw new BadRequestException(
+        'This menu item does not belong to the selected restaurant',
+      );
+    }
+    return item;
+  }
+
+  private assertPositiveMenuPrice(price: string) {
+    const value = Number(price);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new BadRequestException('Menu price must be greater than zero');
+    }
   }
 
   private async recordAudit(

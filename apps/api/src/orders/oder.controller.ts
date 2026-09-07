@@ -71,7 +71,12 @@ export class OrdersController {
     @Body() dto: UpdateOrderStatusDto,
     @Request() req: AuthRequest,
   ) {
-    return this.ordersService.updateStatus(id, dto.status, req.user);
+    return this.ordersService.updateStatus(
+      id,
+      dto.status,
+      req.user,
+      dto.reason,
+    );
   }
 
   @Get(':id')

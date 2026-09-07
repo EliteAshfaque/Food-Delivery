@@ -25,6 +25,7 @@ separate protected administrator workspace.
 | Path | Purpose |
 | --- | --- |
 | `apps/mobile` | Expo / React Native client |
+| `apps/admin` | Separate browser-based operations portal |
 | `apps/api` | NestJS + Drizzle API |
 | `packages/types` | Shared domain types |
 
@@ -34,6 +35,7 @@ separate protected administrator workspace.
 pnpm install
 cp apps/api/.env.example apps/api/.env
 cp apps/mobile/.env.example apps/mobile/.env
+cp apps/admin/.env.example apps/admin/.env
 pnpm --filter api db:push
 pnpm dev:api
 pnpm dev:mobile
@@ -41,9 +43,31 @@ pnpm dev:mobile
 
 Use separate terminals for the last two commands, or run `pnpm dev`.
 
+## Browser Admin Portal
+
+The administrator workspace is a separate browser application, not part of
+the customer/driver mobile experience.
+
+```bash
+# Terminal 1 — API (must be running first)
+pnpm dev:api
+
+# Terminal 2 — browser admin portal
+pnpm dev:admin
+```
+
+Open the URL shown by Vite (normally `http://localhost:5174`). Sign in with an
+**active ADMIN** account. There is no public admin registration page. Create
+the first admin using the bootstrap instructions below, then remove the
+bootstrap environment variable.
+
+For a production portal, set `VITE_API_URL` in `apps/admin/.env` to the public
+`https://.../api` address and add the exact portal HTTPS address to
+`CORS_ORIGINS` in `apps/api/.env`.
+
 ## Required configuration
 
-Set the real values in the two `.env` files; never commit them.
+Set the real values in the relevant `.env` files; never commit them.
 
 - API: `DATABASE_URL`, `JWT_SECRET`, Stripe secret/webhook secret,
   UploadThing token, Upstash Redis credentials, and Google Web Client ID.

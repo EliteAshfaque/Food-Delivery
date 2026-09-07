@@ -2,7 +2,7 @@ import {
   OrderStatus,
   type OrderStatus as OrderStatusType,
 } from '@food-delivery/types';
-import { IsIn } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 const updatableStatuses: OrderStatusType[] = [
   OrderStatus.PREPARING,
@@ -15,4 +15,9 @@ const updatableStatuses: OrderStatusType[] = [
 export class UpdateOrderStatusDto {
   @IsIn(updatableStatuses)
   status!: OrderStatusType;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }

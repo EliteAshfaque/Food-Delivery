@@ -5,9 +5,16 @@ import { AuthModule } from '../auth/auth.modules';
 import { GatewayModule } from '../gateway/gateway.module';
 import { OffersModule } from '../offers/offers.module';
 import { LocationModule } from '../location/location.module';
+import { OperationsModule } from '../operations/operations.module';
 
 @Module({
-  imports: [AuthModule, GatewayModule, OffersModule, LocationModule],
+  imports: [
+    AuthModule,
+    GatewayModule,
+    OffersModule,
+    LocationModule,
+    OperationsModule,
+  ],
   controllers: [PaymentsController],
   providers: [PaymentsService],
   exports: [PaymentsService],

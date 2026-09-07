@@ -1,4 +1,10 @@
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 import { OrderStatus } from '@food-delivery/types';
 
 export class UpdateAdminOrderStatusDto {
@@ -13,4 +19,9 @@ export class UpdateAdminOrderStatusDto {
   @IsString()
   @MaxLength(500)
   reason?: string;
+
+  /** Optional normalized code for cancellation analytics. */
+  @IsOptional()
+  @IsUUID()
+  cancellationReasonId?: string;
 }

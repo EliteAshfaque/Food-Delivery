@@ -14,6 +14,7 @@ import * as schema from '../db/schema';
 import { OrdersGateway } from '../gateway/orders.gateway';
 import { OffersService } from '../offers/offers.service';
 import { LocationService } from '../location/location.service';
+import { OperationsService } from '../operations/operations.service';
 import Stripe from 'stripe';
 
 type OrderRecord = typeof schema.orders.$inferSelect;
@@ -72,6 +73,7 @@ export class PaymentsService {
     private readonly ordersGateway: OrdersGateway,
     private readonly offersService: OffersService,
     private readonly locationService: LocationService,
+    private readonly operationsService: OperationsService,
   ) {
     const stripeSecretKey = configService.get<string>('STRIPE_SECRET_KEY');
     const webhookSecret = configService.get<string>('STRIPE_WEBHOOK_SECRET');
@@ -153,6 +155,62 @@ export class PaymentsService {
     }
 
     return { clientSecret: paymentIntent.client_secret };
+  }
+
+  /** Starts Stripe's PCI-hosted reusable-card setup flow. */
+  async createSetupIntent(customerId: string, stripeCustomerId?: string) {
+    const customer = stripeCustomerId
+      ? await this.stripe.customers.retrieve(stripeCustomerId)
+      : await this.stripe.customers.create({ metadata: { customerId } });
+    if (customer.deleted) {
+      throw new BadRequestException(
+        'Saved payment customer is no longer available',
+      );
+    }
+    const setupIntent = await this.stripe.setupIntents.create({
+      customer: customer.id,
+      payment_method_types: ['card'],
+      usage: 'off_session',
+      metadata: { customerId },
+    });
+    if (!setupIntent.client_secret) {
+      throw new BadRequestException('Could not prepare secure card setup');
+    }
+    return {
+      clientSecret: setupIntent.client_secret,
+      stripeCustomerId: customer.id,
+    };
+  }
+
+  async getReusablePaymentMethod(
+    customerId: string,
+    stripeCustomerId: string,
+    paymentMethodId: string,
+  ) {
+    const customer = await this.stripe.customers.retrieve(stripeCustomerId);
+    if (customer.deleted || customer.metadata.customerId !== customerId) {
+      throw new BadRequestException(
+        'This payment customer does not belong to the signed-in account',
+      );
+    }
+    const method = await this.stripe.paymentMethods.retrieve(paymentMethodId);
+    if (
+      method.customer !== stripeCustomerId ||
+      method.type !== 'card' ||
+      !method.card
+    ) {
+      throw new BadRequestException(
+        'This payment method does not belong to the signed-in customer',
+      );
+    }
+    return {
+      stripeCustomerId,
+      stripePaymentMethodId: method.id,
+      brand: method.card.brand,
+      last4: method.card.last4,
+      expMonth: method.card.exp_month,
+      expYear: method.card.exp_year,
+    };
   }
 
   /**
@@ -345,7 +403,16 @@ export class PaymentsService {
       });
 
       if (result) {
+        await this.db.insert(schema.orderEvents).values({
+          orderId: result.id,
+          type: 'PAYMENT_CONFIRMED',
+          metadata: { status: OrderStatus.CONFIRMED },
+        });
         this.ordersGateway.emitOrderUpdate(result);
+        void this.operationsService.queueCustomerStatusNotification(result);
+        void this.operationsService.queueRestaurantOwnerNewOrderNotification(
+          result,
+        );
         return;
       }
     } catch (error) {
@@ -526,7 +593,13 @@ export class PaymentsService {
       includeRedeemed: true,
     });
     await this.clearTerminalDriverLocation(cancelled.id);
+    await this.db.insert(schema.orderEvents).values({
+      orderId: cancelled.id,
+      type: 'ORDER_CANCELLED',
+      metadata: { reason: cancelled.cancellationReason },
+    });
     this.ordersGateway.emitOrderUpdate(cancelled);
+    void this.operationsService.queueCustomerStatusNotification(cancelled);
     return cancelled;
   }
 
@@ -551,7 +624,13 @@ export class PaymentsService {
     if (cancelled) {
       await this.offersService.releaseReservationForOrder(cancelled.id);
       await this.clearTerminalDriverLocation(cancelled.id);
+      await this.db.insert(schema.orderEvents).values({
+        orderId: cancelled.id,
+        type: 'ORDER_CANCELLED',
+        metadata: { reason: 'Payment intent cancelled' },
+      });
       this.ordersGateway.emitOrderUpdate(cancelled);
+      void this.operationsService.queueCustomerStatusNotification(cancelled);
     }
   }
 

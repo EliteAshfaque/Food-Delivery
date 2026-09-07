@@ -7,6 +7,7 @@ import { DriverModule } from '../driver/driver.module';
 import { OffersModule } from '../offers/offers.module';
 import { LocationModule } from '../location/location.module';
 import { PaymentsModule } from '../payments/payment.modules';
+import { OperationsModule } from '../operations/operations.module';
 
 @Module({
   imports: [
@@ -16,8 +17,10 @@ import { PaymentsModule } from '../payments/payment.modules';
     OffersModule,
     LocationModule,
     PaymentsModule,
+    OperationsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],
+  exports: [OrdersService],
 })
 export class OrdersModule {}

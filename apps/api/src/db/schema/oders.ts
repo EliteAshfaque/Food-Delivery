@@ -33,6 +33,9 @@ export const orders = pgTable('orders', {
     .notNull()
     .references(() => restaurants.id),
   driverId: uuid('driver_id').references(() => user.id),
+  /** A READY order may be offered to a driver before they explicitly accept. */
+  driverAcceptedAt: timestamp('driver_accepted_at'),
+  driverDeclineReason: text('driver_decline_reason'),
   status: orderStatusEnum('status').notNull().default('PENDING'),
   /** Server-calculated menu subtotal before offer discounts. */
   subtotalAmount: numeric('subtotal_amount', { precision: 10, scale: 2 })
