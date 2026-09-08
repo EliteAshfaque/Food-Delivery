@@ -14,9 +14,7 @@ import { UpdateAddressDto } from './dto/update-address.dto';
 
 @Injectable()
 export class AddressesService {
-  constructor(
-    @Inject('DB') private readonly db: NeonDatabase<typeof schema>,
-  ) {}
+  constructor(@Inject('DB') private readonly db: NeonDatabase<typeof schema>) {}
 
   async list(userId: string) {
     return this.db
@@ -30,7 +28,8 @@ export class AddressesService {
   }
 
   async create(userId: string, dto: CreateAddressDto) {
-    const makeDefault = dto.isDefault === true || (await this.count(userId)) === 0;
+    const makeDefault =
+      dto.isDefault === true || (await this.count(userId)) === 0;
 
     return this.db.transaction(async (tx) => {
       if (makeDefault) {

@@ -68,6 +68,8 @@ export type AdminUser = {
   accountStatusReason: string | null;
   accountStatusUpdatedAt: string;
   isOnline: boolean;
+  /** Admin-only delivery readiness signal; the token value is never exposed. */
+  hasPushToken?: boolean;
   createdAt: string;
 };
 

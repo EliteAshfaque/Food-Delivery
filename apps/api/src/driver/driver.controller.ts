@@ -38,6 +38,11 @@ export class DriverController {
     return this.driverService.getActiveOrders(req.user.sub);
   }
 
+  @Get('orders/offers')
+  getPendingOffers(@Request() req: AuthRequest) {
+    return this.driverService.getPendingOffers(req.user.sub);
+  }
+
   @Post('orders/:id/decline')
   declineOrder(
     @Param('id', ParseUUIDPipe) id: string,

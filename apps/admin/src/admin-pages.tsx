@@ -62,6 +62,8 @@ export type PageProps = {
 };
 
 type NoticeState = { type: 'success' | 'error'; message: string } | null;
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function PageNotice({
   notice,
@@ -1009,32 +1011,100 @@ export function NotificationsPage({ request }: PageProps) {
   const [notice, setNotice] = useState<NoticeState>(null);
   const [sending, setSending] = useState(false);
   const [form, setForm] = useState({ recipientId: '', orderId: '', title: '', body: '' });
+  const [recipientSearch, setRecipientSearch] = useState('');
+  const [recipientPickerOpen, setRecipientPickerOpen] = useState(false);
   const loader = useCallback(
     () => request<NotificationRow[]>('/admin/operations/notifications'),
     [request],
   );
+  const recipientsLoader = useCallback(
+    () => request<Paginated<AdminUser>>('/admin/users?accountStatus=ACTIVE&pageSize=100'),
+    [request],
+  );
   const deliveries = useRemote(loader, 20_000);
+  const recipients = useRemote(recipientsLoader);
   const all = deliveries.data ?? [];
   const visible = filter === 'ALL' ? all : all.filter((item) => item.status === filter);
   const sent = all.filter((item) => item.status === 'SENT').length;
   const failed = all.filter((item) => item.status === 'FAILED').length;
   const pending = all.filter((item) => ['QUEUED', 'RETRYING'].includes(item.status)).length;
+  const selectedRecipient = useMemo(
+    () => recipients.data?.items.find((user) => user.id === form.recipientId) ?? null,
+    [form.recipientId, recipients.data],
+  );
+  const matchingRecipients = useMemo(() => {
+    const query = recipientSearch.trim().toLocaleLowerCase();
+    const activeUsers = recipients.data?.items ?? [];
+    const matches = query
+      ? activeUsers.filter((user) =>
+        [fullName(user), user.email ?? '', humanize(user.role)]
+          .join(' ')
+          .toLocaleLowerCase()
+          .includes(query),
+      )
+      : activeUsers;
+
+    return [...matches]
+      .sort((left, right) => fullName(left).localeCompare(fullName(right)))
+      .slice(0, 8);
+  }, [recipientSearch, recipients.data]);
+
+  const refresh = () => {
+    deliveries.reload();
+    recipients.reload();
+  };
+
+  function selectRecipient(recipient: AdminUser) {
+    setForm((value) => ({ ...value, recipientId: recipient.id }));
+    setRecipientSearch('');
+    setRecipientPickerOpen(false);
+  }
+
+  function clearRecipient() {
+    setForm((value) => ({ ...value, recipientId: '' }));
+    setRecipientSearch('');
+    setRecipientPickerOpen(true);
+  }
 
   async function compose(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!form.recipientId) {
+      setNotice({ type: 'error', message: 'Choose an active recipient before sending this notification.' });
+      setRecipientPickerOpen(true);
+      return;
+    }
+    const orderId = form.orderId.trim();
+    if (orderId && !uuidPattern.test(orderId)) {
+      setNotice({
+        type: 'error',
+        message: 'Order ID must be a real order UUID. Leave it empty for a normal announcement or deal.',
+      });
+      return;
+    }
     setSending(true);
     try {
-      await request('/admin/operations/notifications', {
+      const delivery = await request<NotificationRow>('/admin/operations/notifications', {
         method: 'POST',
         body: {
-          recipientId: form.recipientId.trim(),
-          orderId: form.orderId.trim() || undefined,
+          recipientId: form.recipientId,
+          orderId: orderId || undefined,
           title: form.title.trim(),
           body: form.body.trim(),
         },
       });
       setForm({ recipientId: '', orderId: '', title: '', body: '' });
-      setNotice({ type: 'success', message: 'Notification has been queued for delivery.' });
+      setRecipientSearch('');
+      setRecipientPickerOpen(false);
+      if (delivery.status === 'FAILED') {
+        setNotice({
+          type: 'error',
+          message: `Notification was created, but it could not be pushed: ${delivery.lastError ?? 'Unknown delivery error'}.`,
+        });
+      } else if (delivery.status === 'SENT') {
+        setNotice({ type: 'success', message: 'Notification was accepted by the push provider.' });
+      } else {
+        setNotice({ type: 'success', message: 'Notification queued for push delivery. Its live status appears below.' });
+      }
       deliveries.reload();
     } catch (error) {
       setNotice({ type: 'error', message: getErrorMessage(error) });
@@ -1056,8 +1126,8 @@ export function NotificationsPage({ request }: PageProps) {
   return (
     <>
       <PageHeader
-        actions={<RefreshButton busy={deliveries.refreshing} onClick={deliveries.reload} />}
-        description="Compose customer updates and monitor every push delivery attempt from one calm, dedicated workspace."
+        actions={<RefreshButton busy={deliveries.refreshing || recipients.refreshing} onClick={refresh} />}
+        description="Select a real active person, send a clear update, and monitor every push delivery attempt from one dedicated workspace."
         eyebrow="CUSTOMER COMMUNICATIONS"
         title="Notification center"
       />
@@ -1068,9 +1138,71 @@ export function NotificationsPage({ request }: PageProps) {
       </section>
       <section className="notification-layout">
         <form className="content-card notification-compose" onSubmit={compose}>
-          <div><p className="eyebrow">NEW MESSAGE</p><h2>Compose notification</h2><p>Use a customer ID from People or an order-linked recipient from Orders.</p></div>
-          <label className="field"><span>Recipient ID</span><input required onChange={(event) => setForm((value) => ({ ...value, recipientId: event.target.value }))} placeholder="Customer UUID" value={form.recipientId} /></label>
-          <label className="field"><span>Order ID <small>optional</small></span><input onChange={(event) => setForm((value) => ({ ...value, orderId: event.target.value }))} placeholder="Order UUID" value={form.orderId} /></label>
+          <div><p className="eyebrow">NEW MESSAGE</p><h2>Compose notification</h2><p>Choose an active account by name, email, or role. One person receives each message.</p></div>
+          <div className="field notification-recipient-field">
+            <label htmlFor="notification-recipient-search">Send to <small>active account</small></label>
+            {selectedRecipient ? (
+              <div className="notification-recipient-selected">
+                <div className="notification-recipient-selected__identity">
+                  <span className="avatar" aria-hidden="true">{selectedRecipient.firstName.charAt(0).toUpperCase() || '?'}</span>
+                  <div>
+                    <strong>{fullName(selectedRecipient)}</strong>
+                    <small>{selectedRecipient.email ?? 'No email on record'} · {humanize(selectedRecipient.role)}</small>
+                  </div>
+                </div>
+                <div className="notification-recipient-selected__actions">
+                  <span className={`notification-recipient-token ${selectedRecipient.hasPushToken === true ? 'notification-recipient-token--ready' : 'notification-recipient-token--missing'}`}>
+                    {selectedRecipient.hasPushToken === true ? 'Push ready' : selectedRecipient.hasPushToken === false ? 'No push token' : 'Token unknown'}
+                  </span>
+                  <button className="text-button" onClick={clearRecipient} type="button">Change</button>
+                </div>
+              </div>
+            ) : (
+              <div className="notification-recipient-picker">
+                <input
+                  aria-autocomplete="list"
+                  aria-controls="notification-recipient-results"
+                  aria-expanded={recipientPickerOpen}
+                  autoComplete="off"
+                  id="notification-recipient-search"
+                  onBlur={() => window.setTimeout(() => setRecipientPickerOpen(false), 120)}
+                  onChange={(event) => {
+                    setRecipientSearch(event.target.value);
+                    setRecipientPickerOpen(true);
+                  }}
+                  onFocus={() => setRecipientPickerOpen(true)}
+                  placeholder="Search a name, email, or role"
+                  role="combobox"
+                  type="search"
+                  value={recipientSearch}
+                />
+                {recipientPickerOpen ? (
+                  <div className="notification-recipient-results" id="notification-recipient-results" role="listbox">
+                    {recipients.loading ? <p>Loading active people…</p> : null}
+                    {recipients.error && !recipients.data ? <div className="notification-recipient-results__error"><span>Could not load active people.</span><button className="text-button" onClick={recipients.reload} type="button">Retry</button></div> : null}
+                    {!recipients.loading && !recipients.error && matchingRecipients.length === 0 ? <p>No active people match this search.</p> : null}
+                    {!recipients.loading && matchingRecipients.map((recipient) => (
+                      <button
+                        className="notification-recipient-option"
+                        key={recipient.id}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectRecipient(recipient)}
+                        role="option"
+                        type="button">
+                        <span className="avatar" aria-hidden="true">{recipient.firstName.charAt(0).toUpperCase() || '?'}</span>
+                        <span className="notification-recipient-option__copy"><strong>{fullName(recipient)}</strong><small>{recipient.email ?? 'No email on record'} · {humanize(recipient.role)}</small></span>
+                        <span className={`notification-recipient-token ${recipient.hasPushToken === true ? 'notification-recipient-token--ready' : recipient.hasPushToken === false ? 'notification-recipient-token--missing' : ''}`}>
+                          {recipient.hasPushToken === true ? 'Push ready' : recipient.hasPushToken === false ? 'No token' : '—'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+            {selectedRecipient?.hasPushToken === false ? <small className="notification-recipient-warning">This account has not registered a mobile push token yet. The message can be created, but it cannot reach the device until the user opens the installed app and allows notifications.</small> : null}
+          </div>
+          <label className="field"><span>Order ID <small>optional</small></span><input onChange={(event) => setForm((value) => ({ ...value, orderId: event.target.value }))} placeholder="Only for an order-specific update" value={form.orderId} /></label>
           <label className="field"><span>Title</span><input required maxLength={120} onChange={(event) => setForm((value) => ({ ...value, title: event.target.value }))} placeholder="Your order is on the way" value={form.title} /></label>
           <label className="field"><span>Message</span><textarea required maxLength={1000} onChange={(event) => setForm((value) => ({ ...value, body: event.target.value }))} placeholder="Your rider is nearby. We will let you know when they arrive." value={form.body} /></label>
           <div className="notification-compose__footer"><span>Secure push delivery · retry tracking enabled</span><button className="button button--primary" disabled={sending} type="submit">{sending ? 'Queueing…' : 'Queue notification'}</button></div>

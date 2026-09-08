@@ -52,6 +52,7 @@ type OrderDetail = {
   id: string;
   restaurantId: string;
   driverId: string | null;
+  driverAcceptedAt: string | null;
   status: OrderStatusType;
   subtotalAmount?: string;
   discountAmount?: string;
@@ -93,7 +94,7 @@ const STATUS_STEPS: {
     key: OrderStatus.CONFIRMED,
     label: "Order confirmed",
     shortLabel: "Confirmed",
-    detail: "Your order has reached the restaurant",
+    detail: "Payment is confirmed — the restaurant will begin shortly",
     icon: "orderConfirmed",
   },
   {
@@ -131,7 +132,10 @@ function getStatusIndex(status: OrderStatusType) {
   return STATUS_STEPS.findIndex((step) => step.key === status);
 }
 
-function getHeaderContent(status: OrderStatusType) {
+function getHeaderContent(
+  status: OrderStatusType,
+  driverAcceptedAt: string | null = null,
+) {
   switch (status) {
     case "PENDING":
       return {
@@ -144,7 +148,7 @@ function getHeaderContent(status: OrderStatusType) {
       return {
         icon: "orderConfirmed" as const,
         title: "Order confirmed",
-        subtitle: "The restaurant has your order",
+        subtitle: "Payment is confirmed — awaiting the kitchen",
         tone: brand.colors.light.primary,
       };
     case "PREPARING":
@@ -157,8 +161,10 @@ function getHeaderContent(status: OrderStatusType) {
     case "READY":
       return {
         icon: "orderReady" as const,
-        title: "Ready for pickup",
-        subtitle: "Waiting for your driver",
+        title: driverAcceptedAt ? "Rider assigned" : "Finding a rider",
+        subtitle: driverAcceptedAt
+          ? "Your rider is heading to the restaurant"
+          : "Your order is ready — matching a nearby rider",
         tone: brand.colors.light.mint,
       };
     case "PICKED_UP":
@@ -262,10 +268,16 @@ function TrackNode({
   );
 }
 
-function OrderProgressStepper({ status }: { status: OrderStatusType }) {
+function OrderProgressStepper({
+  status,
+  driverAcceptedAt,
+}: {
+  status: OrderStatusType;
+  driverAcceptedAt: string | null;
+}) {
   const reduceMotion = useReducedMotion();
   const currentStep = getStatusIndex(status);
-  const header = getHeaderContent(status);
+  const header = getHeaderContent(status, driverAcceptedAt);
   const activeStep =
     currentStep >= 0 ? STATUS_STEPS[currentStep] : STATUS_STEPS[0];
   const progress = useSharedValue(0);
@@ -338,7 +350,11 @@ function OrderProgressStepper({ status }: { status: OrderStatusType }) {
         </Text>
       </View>
 
-      <OrderStepMotion key={status} status={status} tone={header.tone} />
+      <OrderStepMotion
+        key={`${status}:${driverAcceptedAt ? "assigned" : "matching"}`}
+        status={status}
+        tone={header.tone}
+      />
 
       <View style={styles.trackRail}>
         <View style={styles.trackRailTrack} />
@@ -371,7 +387,11 @@ function OrderProgressStepper({ status }: { status: OrderStatusType }) {
         </View>
         <View style={styles.nowCopy}>
           <Text style={styles.nowTitle}>{activeStep.label}</Text>
-          <Text style={styles.nowDetail}>{activeStep.detail}</Text>
+          <Text style={styles.nowDetail}>
+            {status === OrderStatus.READY && driverAcceptedAt
+              ? "Your rider accepted the pickup and is heading to the restaurant"
+              : activeStep.detail}
+          </Text>
         </View>
         {status !== OrderStatus.DELIVERED ? (
           <View
@@ -642,7 +662,7 @@ export default function OrderDetailScreen() {
     );
   }
 
-  const header = getHeaderContent(order.status);
+  const header = getHeaderContent(order.status, order.driverAcceptedAt);
   const isPending = order.status === "PENDING";
   const isBusy = paymentLoading || confirmingPayment;
   const deliveryCoords =
@@ -866,7 +886,10 @@ export default function OrderDetailScreen() {
           <Text style={styles.liveHint}>Updating status…</Text>
         ) : null}
 
-        <OrderProgressStepper status={order.status} />
+        <OrderProgressStepper
+          driverAcceptedAt={order.driverAcceptedAt}
+          status={order.status}
+        />
 
         {showTrackingMap && deliveryCoords ? (
           <View style={styles.checkoutSection}>

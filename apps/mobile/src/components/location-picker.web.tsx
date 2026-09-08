@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,14 +14,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { brand } from '@/constants/brand';
 import { validateCoordinates } from '@/lib/form-validation';
 import {
+  getAddressSuggestions,
   getCoordinatesForAddress,
+  getCoordinatesForPlace,
+  getCurrentCoordinates,
+  type AddressSuggestion,
   type Coordinates,
 } from '@/lib/location';
 
 type LocationPickerProps = {
   initialCoordinates: Coordinates | null;
+  /** Optional text to use as the first autocomplete query. */
+  initialSearch?: string;
   onClose: () => void;
-  onConfirm: (coordinates: Coordinates) => void;
+  onConfirm: (coordinates: Coordinates, addressLabel?: string) => void;
   title: string;
   visible: boolean;
 };
@@ -31,33 +38,126 @@ type LocationPickerProps = {
  */
 export function LocationPicker({
   initialCoordinates,
+  initialSearch,
   onClose,
   onConfirm,
   title,
   visible,
 }: LocationPickerProps) {
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialSearch?.trim() ?? '');
   const [selected, setSelected] = useState<Coordinates | null>(
     initialCoordinates,
   );
   const [isSearching, setSearching] = useState(false);
+  const [isResolvingSuggestion, setResolvingSuggestion] = useState(false);
+  const [isLocatingCurrent, setLocatingCurrent] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
+  const [selectedAddressLabel, setSelectedAddressLabel] = useState<string | null>(null);
+  const searchRequest = useRef(0);
+  const skipNextAutocomplete = useRef(false);
+
+  useEffect(() => {
+    if (skipNextAutocomplete.current) {
+      skipNextAutocomplete.current = false;
+      return;
+    }
+    const query = search.trim();
+    const requestId = ++searchRequest.current;
+    if (query.length < 3) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void getAddressSuggestions(query)
+        .then((results) => {
+          if (searchRequest.current === requestId) setSuggestions(results);
+        })
+        .catch(() => {
+          if (searchRequest.current === requestId) setSuggestions([]);
+        });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    if (value.trim().length < 3) {
+      ++searchRequest.current;
+      setSuggestions([]);
+    }
+  }
+
+  async function selectSuggestion(suggestion: AddressSuggestion) {
+    const requestId = ++searchRequest.current;
+    skipNextAutocomplete.current = true;
+    setSearch(suggestion.fullText);
+    setSuggestions([]);
+    setSelectedAddressLabel(suggestion.fullText);
+    setSearching(false);
+    setResolvingSuggestion(true);
+    setSearchError(null);
+    try {
+      const coordinates =
+        (await getCoordinatesForPlace(suggestion.placeId)) ??
+        (await getCoordinatesForAddress(suggestion.fullText));
+      if (!coordinates || searchRequest.current !== requestId) {
+        if (searchRequest.current === requestId) {
+          setSearchError('That location is unavailable. Try another result.');
+        }
+        return;
+      }
+      setSelected(coordinates);
+    } catch {
+      if (searchRequest.current === requestId) {
+        setSearchError('Unable to open that location. Check your connection and try again.');
+      }
+    } finally {
+      if (searchRequest.current === requestId) setResolvingSuggestion(false);
+    }
+  }
+
+  async function handleUseCurrentLocation() {
+    if (isLocatingCurrent) return;
+    setLocatingCurrent(true);
+    setSearchError(null);
+    try {
+      const coordinates = await getCurrentCoordinates();
+      if (!coordinates) {
+        setSearchError('Allow location access to use your current location.');
+        return;
+      }
+      setSelected(coordinates);
+      setSuggestions([]);
+      setSelectedAddressLabel(null);
+    } catch {
+      setSearchError('Your current location is unavailable. Search an address instead.');
+    } finally {
+      setLocatingCurrent(false);
+    }
+  }
 
   async function searchLocation() {
     if (!search.trim() || isSearching) return;
+    const query = search.trim();
+    const requestId = ++searchRequest.current;
     setSearching(true);
     setSearchError(null);
+    setSuggestions([]);
     try {
-      const coordinates = await getCoordinatesForAddress(search.trim());
+      const coordinates = await getCoordinatesForAddress(query);
+      if (searchRequest.current !== requestId) return;
       if (!coordinates) {
         setSearchError('Location not found. Try a city or fuller address.');
         return;
       }
       setSelected(coordinates);
+      setSelectedAddressLabel(query);
     } catch {
-      setSearchError('Unable to search right now. Try again.');
+      if (searchRequest.current === requestId) {
+        setSearchError('Unable to search right now. Try again.');
+      }
     } finally {
-      setSearching(false);
+      if (searchRequest.current === requestId) setSearching(false);
     }
   }
 
@@ -78,8 +178,8 @@ export function LocationPicker({
 
         <View style={styles.body}>
           <Text style={styles.hint}>
-            Map pins are available in Expo Go on iOS/Android. On web, search an
-            address to set the delivery pin.
+            Search for an area or building, or use your current location to set
+            the delivery pin.
           </Text>
 
           <View style={styles.searchRow}>
@@ -87,7 +187,7 @@ export function LocationPicker({
               autoCapitalize="words"
               autoCorrect={false}
               maxLength={200}
-              onChangeText={setSearch}
+              onChangeText={handleSearchChange}
               onSubmitEditing={() => void searchLocation()}
               placeholder="Search city, area, or address"
               placeholderTextColor={brand.colors.light.inkMuted}
@@ -111,6 +211,51 @@ export function LocationPicker({
             </Pressable>
           </View>
 
+          <Pressable
+            accessibilityRole="button"
+            disabled={isLocatingCurrent}
+            onPress={() => void handleUseCurrentLocation()}
+            style={styles.currentLocationButton}>
+            {isLocatingCurrent ? (
+              <ActivityIndicator color={brand.colors.light.primary} size="small" />
+            ) : (
+              <Text style={styles.currentLocationIcon}>◎</Text>
+            )}
+            <Text style={styles.currentLocationText}>Use my current location</Text>
+          </Pressable>
+
+          {suggestions.length > 0 ? (
+            <View style={styles.suggestions}>
+              <ScrollView keyboardShouldPersistTaps="handled">
+                {suggestions.map((suggestion) => (
+                  <Pressable
+                    accessibilityRole="button"
+                    key={suggestion.placeId}
+                    onPress={() => void selectSuggestion(suggestion)}
+                    style={styles.suggestionRow}>
+                    <View style={styles.suggestionCopy}>
+                      <Text numberOfLines={1} style={styles.suggestionPrimary}>
+                        {suggestion.primaryText}
+                      </Text>
+                      {suggestion.secondaryText ? (
+                        <Text numberOfLines={1} style={styles.suggestionSecondary}>
+                          {suggestion.secondaryText}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          {isResolvingSuggestion ? (
+            <View style={styles.resolvingRow}>
+              <ActivityIndicator color={brand.colors.light.primary} size="small" />
+              <Text style={styles.resolvingText}>Locating exact address…</Text>
+            </View>
+          ) : null}
+
           {searchError ? (
             <Text style={styles.searchError}>{searchError}</Text>
           ) : null}
@@ -133,7 +278,7 @@ export function LocationPicker({
               setSearchError(validationError);
               return;
             }
-            if (selected) onConfirm(selected);
+            if (selected) onConfirm(selected, selectedAddressLabel ?? undefined);
           }}
           style={[styles.confirm, !selected && styles.confirmDisabled]}>
           <Text style={styles.confirmText}>
@@ -188,7 +333,36 @@ const styles = StyleSheet.create({
   },
   searchButtonDisabled: { opacity: 0.55 },
   searchButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  currentLocationButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  currentLocationIcon: { color: brand.colors.light.primary, fontSize: 20, fontWeight: '800' },
+  currentLocationText: { color: brand.colors.light.primary, fontSize: 13, fontWeight: '800' },
   searchError: { color: '#B42318', fontSize: 12 },
+  suggestions: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E9DED8',
+    borderRadius: 12,
+    borderWidth: 1,
+    maxHeight: 188,
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    borderBottomColor: '#F0E7E2',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    minHeight: 56,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  suggestionCopy: { flex: 1 },
+  suggestionPrimary: { color: brand.colors.light.ink, fontSize: 14, fontWeight: '700' },
+  suggestionSecondary: { color: brand.colors.light.inkMuted, fontSize: 12, marginTop: 2 },
+  resolvingRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  resolvingText: { color: brand.colors.light.inkMuted, fontSize: 13, fontWeight: '600' },
   coords: {
     color: brand.colors.light.ink,
     fontFamily: 'monospace',

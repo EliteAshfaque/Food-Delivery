@@ -25,6 +25,7 @@ import { RequestErrorState } from '@/components/request-error-state';
 import { brand } from '@/constants/brand';
 import { BottomTabInset } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
+import { useOrderSocket } from '@/hooks/user-order.socket';
 import { getServerUrl } from '@/lib/api-config';
 import { getApiErrorMessage } from '@/lib/api-error';
 import { api } from '@/lib/axios';
@@ -93,6 +94,7 @@ export default function DriverActiveScreen() {
 
   const socketRef = useRef<Socket | null>(null);
   const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
+  const lastInterventionNoticeRef = useRef<string | null>(null);
   const [isTrackingReady, setTrackingReady] = useState(false);
   const [sharingOrderId, setSharingOrderId] = useState<string | null>(null);
   const [liveCoords, setLiveCoords] = useState<LiveCoords | null>(null);
@@ -116,6 +118,37 @@ export default function DriverActiveScreen() {
     queryFn: () => api.get('/driver/orders/active').then((res) => res.data),
     refetchInterval: 8000,
   });
+  const order = activeOrders[0] ?? null;
+  const activeOrderUpdate = useOrderSocket(order?.id ?? null);
+
+  // Polling remains the offline fallback, but cancellation or an operations
+  // reassignment must remove the old task immediately while the driver is in
+  // the active-delivery screen.
+  useEffect(() => {
+    if (!activeOrderUpdate?.id) return;
+    const nextStatus =
+      typeof activeOrderUpdate.status === 'string'
+        ? activeOrderUpdate.status
+        : undefined;
+    const nextDriverId =
+      typeof activeOrderUpdate.driverId === 'string'
+        ? activeOrderUpdate.driverId
+        : null;
+    const assignmentWasRemoved =
+      nextStatus === OrderStatus.CANCELLED || nextDriverId !== user?.id;
+    const noticeKey = `${activeOrderUpdate.id}:${nextStatus ?? ''}:${nextDriverId ?? ''}`;
+    if (assignmentWasRemoved && lastInterventionNoticeRef.current !== noticeKey) {
+      lastInterventionNoticeRef.current = noticeKey;
+      Alert.alert(
+        'Delivery updated',
+        nextStatus === OrderStatus.CANCELLED
+          ? 'This order was cancelled, so the delivery task has been closed.'
+          : 'This delivery is no longer assigned to you.',
+      );
+    }
+    queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
+    queryClient.invalidateQueries({ queryKey: ['driver-orders'] });
+  }, [activeOrderUpdate, queryClient, user?.id]);
 
   const {
     mutate: updateStatus,
@@ -145,23 +178,7 @@ export default function DriverActiveScreen() {
     },
   });
 
-  const { mutate: declineOrder, isPending: declining } = useMutation({
-    mutationFn: (orderId: string) =>
-      api.post(`/driver/orders/${orderId}/decline`).then((res) => res.data),
-    onSuccess: () => {
-      setSharingOrderId(null);
-      setTrackingReady(false);
-      setLiveCoords(null);
-      stopNativeTracking();
-      queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
-    },
-    onError: (error) => {
-      Alert.alert('Could not decline delivery', getApiErrorMessage(error));
-    },
-  });
-
-  const order = activeOrders[0] ?? null;
-  const busy = updating || declining;
+  const busy = updating;
   const isEnRoute = order?.status === OrderStatus.PICKED_UP;
   const isOnActiveRoute =
     order?.status === OrderStatus.READY ||
@@ -216,6 +233,45 @@ export default function DriverActiveScreen() {
           transports: ['websocket'],
         });
         socketRef.current = socket;
+        let socketReady = false;
+        let watchStarted = false;
+
+        const startLocationWatch = async () => {
+          if (cancelled || watchStarted) return;
+          watchStarted = true;
+
+          const watch = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.High,
+              timeInterval: 3000,
+              distanceInterval: 10,
+            },
+            (location) => {
+              const coords = {
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+              };
+              setLiveCoords(coords);
+              // Do not queue a GPS update before the server has finished
+              // authenticating this socket (or while it is reconnecting).
+              if (!socketReady) return;
+              socketRef.current?.emit('driver:location', {
+                driverId,
+                orderId: order.id,
+                restaurantId: order.restaurantId,
+                ...coords,
+              });
+            },
+          );
+
+          if (cancelled) {
+            watch.remove();
+            return;
+          }
+
+          locationWatchRef.current = watch;
+          setTrackingReady(true);
+        };
 
         socket.on('connect_error', () => {
           if (cancelled) return;
@@ -227,6 +283,27 @@ export default function DriverActiveScreen() {
             'Live location unavailable',
             'We could not start secure location sharing. Check your connection and try again.',
           );
+        });
+        socket.on('disconnect', () => {
+          socketReady = false;
+          if (!cancelled) setTrackingReady(false);
+        });
+        socket.on('socket:ready', () => {
+          socketReady = true;
+          void startLocationWatch().catch((error) => {
+            if (cancelled) return;
+            stopNativeTracking();
+            setSharingOrderId(null);
+            setTrackingReady(false);
+            setLiveCoords(null);
+            Alert.alert(
+              'Live location unavailable',
+              getApiErrorMessage(
+                error,
+                'We could not start location sharing. Check your location settings and try again.',
+              ),
+            );
+          });
         });
         socket.on(
           'driver:location:error',
@@ -243,35 +320,6 @@ export default function DriverActiveScreen() {
             Alert.alert('Live location paused', message);
           },
         );
-
-        const watch = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 3000,
-            distanceInterval: 10,
-          },
-          (location) => {
-            const coords = {
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-            };
-            setLiveCoords(coords);
-            socketRef.current?.emit('driver:location', {
-              driverId,
-              orderId: order.id,
-              restaurantId: order.restaurantId,
-              ...coords,
-            });
-          },
-        );
-
-        if (cancelled) {
-          watch.remove();
-          return;
-        }
-
-        locationWatchRef.current = watch;
-        setTrackingReady(true);
       } catch (error) {
         if (cancelled) return;
         stopNativeTracking();
@@ -571,32 +619,6 @@ export default function DriverActiveScreen() {
                     <ActivityIndicator color="#fff" />
                   ) : (
                     <Text style={styles.primaryButtonText}>{action.label}</Text>
-                  )}
-                </Pressable>
-              ) : null}
-
-              {order.status === OrderStatus.READY ? (
-                <Pressable
-                  style={[styles.declineButton, busy && styles.disabled]}
-                  disabled={busy}
-                  onPress={() => {
-                    Alert.alert(
-                      'Decline delivery?',
-                      'This order will be offered to another driver.',
-                      [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Decline',
-                          style: 'destructive',
-                          onPress: () => declineOrder(order.id),
-                        },
-                      ],
-                    );
-                  }}>
-                  {declining ? (
-                    <ActivityIndicator color="#DC2626" />
-                  ) : (
-                    <Text style={styles.declineButtonText}>Decline order</Text>
                   )}
                 </Pressable>
               ) : null}

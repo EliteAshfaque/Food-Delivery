@@ -124,7 +124,9 @@ export class UploadAuthorizationService implements UploadAuthorizer {
     }
   }
 
-  private forbidden(message = 'You are not allowed to upload files for this restaurant') {
+  private forbidden(
+    message = 'You are not allowed to upload files for this restaurant',
+  ) {
     // UploadThing maps this error to a 403 response. Do not distinguish an
     // expired token, suspended account, or another owner's restaurant.
     return new UploadThingError({

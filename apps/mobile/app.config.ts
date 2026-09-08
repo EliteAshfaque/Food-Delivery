@@ -49,6 +49,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     scheme: 'wasil',
     userInterfaceStyle: 'automatic',
     ios: {
+      bundleIdentifier: 'com.wasil.fooddelivery',
       icon: './assets/images/wasil-icon.png',
       infoPlist: {
         NSSupportsLiveActivities: true,
@@ -128,6 +129,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     extra: {
       ...config.extra,
       googleWebClientId,
+      eas: {
+        ...(config.extra?.eas ?? {}),
+        projectId:
+          process.env.EXPO_PUBLIC_EAS_PROJECT_ID ??
+          config.extra?.eas?.projectId,
+      },
     },
     experiments: {
       typedRoutes: true,

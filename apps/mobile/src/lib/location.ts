@@ -3,8 +3,112 @@ import { Platform } from 'react-native';
 
 export type Coordinates = { latitude: number; longitude: number };
 
+export type AddressSuggestion = {
+  /** Google Places resource name, e.g. `places/ChIJ...`. */
+  placeId: string;
+  primaryText: string;
+  secondaryText: string;
+  fullText: string;
+};
+
 const googleMapsApiKey =
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim() || '';
+
+const placesApiUrl = 'https://places.googleapis.com/v1';
+
+function placeHeaders(fieldMask: string) {
+  return {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'X-Goog-Api-Key': googleMapsApiKey,
+    'X-Goog-FieldMask': fieldMask,
+  };
+}
+
+/**
+ * Returns address predictions while the customer types. It uses Places API
+ * (New), which is much more accurate for building/area searches than plain
+ * geocoding. The UAE location bias stops "Marina" from resolving overseas.
+ */
+export async function getAddressSuggestions(
+  input: string,
+): Promise<AddressSuggestion[]> {
+  const query = input.trim();
+  if (query.length < 3 || !googleMapsApiKey) return [];
+
+  const response = await fetch(`${placesApiUrl}/places:autocomplete`, {
+    method: 'POST',
+    headers: placeHeaders(
+      'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat',
+    ),
+    body: JSON.stringify({
+      input: query,
+      includedRegionCodes: ['ae'],
+      locationBias: {
+        rectangle: {
+          low: { latitude: 22.5, longitude: 51.4 },
+          high: { latitude: 26.2, longitude: 56.5 },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) return [];
+
+  const payload = (await response.json()) as {
+    suggestions?: {
+      placePrediction?: {
+        placeId?: string;
+        text?: { text?: string };
+        structuredFormat?: {
+          mainText?: { text?: string };
+          secondaryText?: { text?: string };
+        };
+      };
+    }[];
+  };
+
+  return (payload.suggestions ?? []).flatMap(({ placePrediction }) => {
+    const placeId = placePrediction?.placeId;
+    const fullText = placePrediction?.text?.text?.trim();
+    if (!placeId || !fullText) return [];
+
+    return [
+      {
+        placeId,
+        fullText,
+        primaryText:
+          placePrediction?.structuredFormat?.mainText?.text?.trim() ?? fullText,
+        secondaryText:
+          placePrediction?.structuredFormat?.secondaryText?.text?.trim() ?? '',
+      },
+    ];
+  });
+}
+
+/** Resolves an autocomplete result to the exact map pin chosen by the user. */
+export async function getCoordinatesForPlace(
+  placeId: string,
+): Promise<Coordinates | null> {
+  if (!placeId || !googleMapsApiKey) return null;
+
+  const response = await fetch(
+    `${placesApiUrl}/places/${encodeURIComponent(placeId)}`,
+    {
+      headers: placeHeaders('location'),
+    },
+  );
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as {
+    location?: { latitude?: number; longitude?: number };
+  };
+  const latitude = payload.location?.latitude;
+  const longitude = payload.location?.longitude;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+  return { latitude: latitude!, longitude: longitude! };
+}
 
 export async function getCurrentCoordinates(): Promise<Coordinates | null> {
   const { status } = await Location.requestForegroundPermissionsAsync();
@@ -43,9 +147,9 @@ async function geocodeWithGoogle(address: string): Promise<Coordinates | null> {
 
   const payload = (await response.json()) as {
     status?: string;
-    results?: Array<{
+    results?: {
       geometry?: { location?: { lat?: number; lng?: number } };
-    }>;
+    }[];
   };
 
   if (payload.status !== 'OK' && payload.status !== 'ZERO_RESULTS') {
@@ -79,7 +183,7 @@ async function reverseGeocodeWithGoogle(
 
   const payload = (await response.json()) as {
     status?: string;
-    results?: Array<{ formatted_address?: string }>;
+    results?: { formatted_address?: string }[];
   };
 
   if (payload.status !== 'OK') return null;

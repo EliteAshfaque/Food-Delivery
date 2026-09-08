@@ -64,8 +64,9 @@ export class LocationController {
     // also cleans up a legacy/stale Redis value created before terminal-state
     // cleanup was introduced.
     if (
-      order.status !== OrderStatus.READY &&
-      order.status !== OrderStatus.PICKED_UP
+      order.cancellationRequestedAt ||
+      (order.status !== OrderStatus.READY &&
+        order.status !== OrderStatus.PICKED_UP)
     ) {
       try {
         await this.locationService.deleteDriverLocation(orderId);

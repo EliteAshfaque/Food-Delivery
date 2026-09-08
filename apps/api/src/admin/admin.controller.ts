@@ -175,11 +175,7 @@ export class AdminController {
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Request() req: AuthRequest,
   ) {
-    return this.adminService.deleteRestaurantMenuItem(
-      id,
-      itemId,
-      req.user.sub,
-    );
+    return this.adminService.deleteRestaurantMenuItem(id, itemId, req.user.sub);
   }
 
   @Get('orders')

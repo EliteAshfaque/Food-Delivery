@@ -218,7 +218,11 @@ export class PaymentsService {
    * locks ordinary workflow changes, cancels an uncaptured intent or refunds a
    * captured intent, and only then marks the order cancelled.
    */
-  async cancelAndRefundOrder(orderId: string, reason: string) {
+  async cancelAndRefundOrder(
+    orderId: string,
+    reason: string,
+    expectedStatus?: OrderStatus,
+  ) {
     const now = new Date();
     let order: OrderRecord;
 
@@ -232,6 +236,7 @@ export class PaymentsService {
       .where(
         and(
           eq(schema.orders.id, orderId),
+          expectedStatus ? eq(schema.orders.status, expectedStatus) : undefined,
           ne(schema.orders.status, OrderStatus.DELIVERED),
           ne(schema.orders.status, OrderStatus.CANCELLED),
           isNull(schema.orders.cancellationRequestedAt),
@@ -251,6 +256,11 @@ export class PaymentsService {
       // A retry resumes a payment/refund operation safely because both Stripe
       // requests use stable idempotency keys and the stored IDs are retained.
       if (!current.cancellationRequestedAt) {
+        if (expectedStatus && current.status !== expectedStatus) {
+          throw new ConflictException(
+            'The order changed before cancellation could begin. Refresh and try again.',
+          );
+        }
         throw new ConflictException('The order changed. Refresh and try again');
       }
       order = current;
@@ -399,15 +409,18 @@ export class PaymentsService {
           }
         }
 
+        // A paid order must never become CONFIRMED without a durable timeline
+        // entry. Stripe will retry this webhook if the transaction rolls back.
+        await tx.insert(schema.orderEvents).values({
+          orderId: confirmed.id,
+          type: 'PAYMENT_CONFIRMED',
+          metadata: { status: OrderStatus.CONFIRMED },
+        });
+
         return confirmed;
       });
 
       if (result) {
-        await this.db.insert(schema.orderEvents).values({
-          orderId: result.id,
-          type: 'PAYMENT_CONFIRMED',
-          metadata: { status: OrderStatus.CONFIRMED },
-        });
         this.ordersGateway.emitOrderUpdate(result);
         void this.operationsService.queueCustomerStatusNotification(result);
         void this.operationsService.queueRestaurantOwnerNewOrderNotification(
@@ -564,22 +577,34 @@ export class PaymentsService {
 
   private async finalizeCancellation(orderId: string) {
     const now = new Date();
-    const [cancelled] = await this.db
-      .update(schema.orders)
-      .set({
-        status: OrderStatus.CANCELLED,
-        cancelledAt: now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(schema.orders.id, orderId),
-          ne(schema.orders.status, OrderStatus.DELIVERED),
-          ne(schema.orders.status, OrderStatus.CANCELLED),
-          isNotNull(schema.orders.cancellationRequestedAt),
-        ),
-      )
-      .returning();
+    const cancelled = await this.db.transaction(async (tx) => {
+      const [nextOrder] = await tx
+        .update(schema.orders)
+        .set({
+          status: OrderStatus.CANCELLED,
+          cancelledAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(schema.orders.id, orderId),
+            ne(schema.orders.status, OrderStatus.DELIVERED),
+            ne(schema.orders.status, OrderStatus.CANCELLED),
+            isNotNull(schema.orders.cancellationRequestedAt),
+          ),
+        )
+        .returning();
+
+      if (!nextOrder) return null;
+
+      await tx.insert(schema.orderEvents).values({
+        orderId: nextOrder.id,
+        type: 'ORDER_CANCELLED',
+        metadata: { reason: nextOrder.cancellationReason },
+      });
+
+      return nextOrder;
+    });
 
     if (!cancelled) {
       const current = await this.getOrder(orderId);
@@ -593,42 +618,60 @@ export class PaymentsService {
       includeRedeemed: true,
     });
     await this.clearTerminalDriverLocation(cancelled.id);
-    await this.db.insert(schema.orderEvents).values({
-      orderId: cancelled.id,
-      type: 'ORDER_CANCELLED',
-      metadata: { reason: cancelled.cancellationReason },
-    });
     this.ordersGateway.emitOrderUpdate(cancelled);
     void this.operationsService.queueCustomerStatusNotification(cancelled);
+    if (cancelled.driverId) {
+      this.ordersGateway.emitDriverOfferRevoked(
+        cancelled.driverId,
+        cancelled.id,
+        'This delivery was cancelled and is no longer active.',
+      );
+      void this.operationsService.queueOrderNotification(
+        cancelled.driverId,
+        cancelled.id,
+        'Delivery cancelled',
+        'This delivery was cancelled and no further action is needed.',
+      );
+    }
     return cancelled;
   }
 
   private async cancelPendingOrderAfterIntentCancellation(order: OrderRecord) {
-    const [cancelled] = await this.db
-      .update(schema.orders)
-      .set({
-        status: OrderStatus.CANCELLED,
-        cancelledAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(schema.orders.id, order.id),
-          eq(schema.orders.status, OrderStatus.PENDING),
-          eq(schema.orders.stripePaymentIntentId, order.stripePaymentIntentId!),
-          isNull(schema.orders.cancellationRequestedAt),
-        ),
-      )
-      .returning();
+    const cancelled = await this.db.transaction(async (tx) => {
+      const [nextOrder] = await tx
+        .update(schema.orders)
+        .set({
+          status: OrderStatus.CANCELLED,
+          cancelledAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.orders.id, order.id),
+            eq(schema.orders.status, OrderStatus.PENDING),
+            eq(
+              schema.orders.stripePaymentIntentId,
+              order.stripePaymentIntentId!,
+            ),
+            isNull(schema.orders.cancellationRequestedAt),
+          ),
+        )
+        .returning();
+
+      if (!nextOrder) return null;
+
+      await tx.insert(schema.orderEvents).values({
+        orderId: nextOrder.id,
+        type: 'ORDER_CANCELLED',
+        metadata: { reason: 'Payment intent cancelled' },
+      });
+
+      return nextOrder;
+    });
 
     if (cancelled) {
       await this.offersService.releaseReservationForOrder(cancelled.id);
       await this.clearTerminalDriverLocation(cancelled.id);
-      await this.db.insert(schema.orderEvents).values({
-        orderId: cancelled.id,
-        type: 'ORDER_CANCELLED',
-        metadata: { reason: 'Payment intent cancelled' },
-      });
       this.ordersGateway.emitOrderUpdate(cancelled);
       void this.operationsService.queueCustomerStatusNotification(cancelled);
     }

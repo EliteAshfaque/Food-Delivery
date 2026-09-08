@@ -22,7 +22,6 @@ import { getApiErrorMessage } from "@/lib/api-error";
 import { api } from "@/lib/axios";
 import {
   getAddressForCoordinates,
-  getCoordinatesForAddress,
 } from "@/lib/location";
 
 const LABEL_OPTIONS = ["Home", "Work", "Other"] as const;
@@ -48,7 +47,6 @@ export default function AddressesScreen() {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<AddressDraft | null>(null);
   const [mapVisible, setMapVisible] = useState(false);
-  const [locating, setLocating] = useState(false);
 
   const addresses = useQuery({
     queryKey: ["addresses"],
@@ -111,49 +109,47 @@ export default function AddressesScreen() {
     () => addresses.data ?? [],
     [addresses.data],
   );
-
-  async function locateTypedAddress() {
-    if (!draft?.addressLine.trim()) {
-      Alert.alert("Enter an address", "Add street, building, or area first.");
-      return;
-    }
-    setLocating(true);
-    try {
-      const coords = await getCoordinatesForAddress(draft.addressLine.trim());
-      if (!coords) {
-        Alert.alert(
-          "Address not found",
-          "Try a fuller address, or drop a pin on the map.",
-        );
-        return;
-      }
-      setDraft({ ...draft, latitude: coords.latitude, longitude: coords.longitude });
-    } catch {
-      Alert.alert("Address unavailable", "Try again or use the map.");
-    } finally {
-      setLocating(false);
-    }
-  }
+  const defaultIsLocked = Boolean(
+    (draft?.id && sorted.find((address) => address.id === draft.id)?.isDefault) ||
+      (!draft?.id && sorted.length === 0),
+  );
 
   async function onMapConfirm(coordinates: {
     latitude: number;
     longitude: number;
-  }) {
+  }, selectedAddressLabel?: string) {
     setMapVisible(false);
     if (!draft) return;
-    let addressLine = draft.addressLine;
-    try {
-      const detected = await getAddressForCoordinates(coordinates);
-      if (detected) addressLine = detected;
-    } catch {
-      // Pin is still valid without reverse geocode.
+    let detectedAddress = selectedAddressLabel?.trim() || null;
+    if (!detectedAddress) {
+      try {
+        detectedAddress = await getAddressForCoordinates(coordinates);
+      } catch {
+        // The pin is still valid without reverse geocoding.
+      }
     }
-    setDraft({
-      ...draft,
-      addressLine,
-      latitude: coordinates.latitude,
-      longitude: coordinates.longitude,
-    });
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            // A selected place is authoritative: users expect “Use this
+            // location” to replace the address field with that location.
+            addressLine: detectedAddress ?? current.addressLine,
+            latitude: coordinates.latitude,
+            longitude: coordinates.longitude,
+          }
+        : current,
+    );
+  }
+
+  function toggleDraftDefault() {
+    if (!draft) return;
+    const persistedDefault = Boolean(
+      draft.id && sorted.find((address) => address.id === draft.id)?.isDefault,
+    );
+    const firstAddressMustBeDefault = !draft.id && sorted.length === 0;
+    if (persistedDefault || firstAddressMustBeDefault) return;
+    setDraft({ ...draft, isDefault: !draft.isDefault });
   }
 
   function confirmDelete(address: UserAddress) {
@@ -304,41 +300,52 @@ export default function AddressesScreen() {
             ))}
           </View>
 
-          <Text style={styles.fieldLabel}>Delivery instructions</Text>
+          <Text style={styles.fieldLabel}>Delivery address</Text>
           <TextInput
             multiline
             onChangeText={(addressLine) =>
               setDraft({
                 ...draft,
                 addressLine,
-                latitude: null,
-                longitude: null,
               })
             }
-            placeholder="Street, building, apartment..."
+            placeholder="Building, street, area, apartment..."
             placeholderTextColor={brand.colors.light.inkMuted}
             style={styles.input}
             textAlignVertical="top"
             value={draft.addressLine}
           />
 
-          <Pressable
-            disabled={locating}
-            onPress={() => void locateTypedAddress()}
-            style={styles.secondaryButton}
-          >
-            {locating ? (
-              <ActivityIndicator color={brand.colors.light.primary} />
-            ) : (
-              <Text style={styles.secondaryButtonText}>Locate typed address</Text>
-            )}
-          </Pressable>
+          <Text style={styles.fieldLabel}>Pin your exact delivery location</Text>
+          <Text style={styles.locationCaption}>
+            Search for an area or building, use your current location, then adjust the pin if needed.
+          </Text>
           <Pressable
             onPress={() => setMapVisible(true)}
-            style={styles.secondaryButton}
+            style={[
+              styles.mapButton,
+              draft.latitude != null &&
+                draft.longitude != null &&
+                styles.mapButtonSelected,
+            ]}
           >
-            <Text style={styles.secondaryButtonText}>
-              Choose pin on map
+            <View style={styles.mapButtonIcon}>
+              <AppIcon color={brand.colors.light.primary} name="deliveryLocation" size="sm" />
+            </View>
+            <View style={styles.mapButtonCopy}>
+              <Text style={styles.mapButtonTitle}>
+                {draft.latitude != null && draft.longitude != null
+                  ? "Delivery pin selected"
+                  : "Set delivery pin"}
+              </Text>
+              <Text style={styles.mapButtonSubtext}>
+                {draft.latitude != null && draft.longitude != null
+                  ? "Tap to review or move the exact pin"
+                  : "Search, use current location, or tap the map"}
+              </Text>
+            </View>
+            <Text style={styles.mapButtonAction}>
+              {draft.latitude != null && draft.longitude != null ? "Change" : "Choose"}
             </Text>
           </Pressable>
 
@@ -354,21 +361,36 @@ export default function AddressesScreen() {
           )}
 
           <Pressable
-            onPress={() =>
-              setDraft({ ...draft, isDefault: !draft.isDefault })
-            }
-            style={styles.defaultToggle}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: draft.isDefault, disabled: defaultIsLocked }}
+            disabled={defaultIsLocked}
+            onPress={toggleDraftDefault}
+            style={[
+              styles.defaultToggle,
+              draft.isDefault && styles.defaultToggleSelected,
+            ]}
           >
             <View
               style={[
                 styles.checkbox,
                 draft.isDefault && styles.checkboxChecked,
               ]}
-            />
+            >
+              {draft.isDefault ? (
+                <Text style={styles.checkboxTick}>✓</Text>
+              ) : null}
+            </View>
             <Text style={styles.defaultToggleText}>
-              Set as default delivery address
+              {draft.isDefault
+                ? "This is your default delivery address"
+                : "Make this my default delivery address"}
             </Text>
           </Pressable>
+          {defaultIsLocked ? (
+            <Text style={styles.defaultHint}>
+              Choose another saved address later if you want to change your default.
+            </Text>
+          ) : null}
 
           <View style={styles.formActions}>
             <Pressable
@@ -378,9 +400,18 @@ export default function AddressesScreen() {
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </Pressable>
             <Pressable
-              disabled={saveMutation.isPending}
+              disabled={
+                saveMutation.isPending ||
+                draft.latitude == null ||
+                draft.longitude == null
+              }
               onPress={() => saveMutation.mutate(draft)}
-              style={styles.saveButton}
+              style={[
+                styles.saveButton,
+                (saveMutation.isPending ||
+                  draft.latitude == null ||
+                  draft.longitude == null) && styles.buttonDisabled,
+              ]}
             >
               {saveMutation.isPending ? (
                 <ActivityIndicator color="#FFFFFF" />
@@ -398,9 +429,12 @@ export default function AddressesScreen() {
             ? { latitude: draft.latitude, longitude: draft.longitude }
             : null
         }
+        initialSearch={draft?.addressLine}
         onClose={() => setMapVisible(false)}
-        onConfirm={(coordinates) => void onMapConfirm(coordinates)}
-        title="Address location"
+        onConfirm={(coordinates, addressLabel) =>
+          void onMapConfirm(coordinates, addressLabel)
+        }
+        title="Set delivery location"
         visible={mapVisible}
       />
     </SafeAreaView>
@@ -589,6 +623,78 @@ const styles = StyleSheet.create({
     minHeight: 96,
     padding: 14,
   },
+  locationCaption: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 10,
+  },
+  locationActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+  locationAction: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: "row",
+    gap: 7,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 8,
+  },
+  locationActionText: {
+    color: brand.colors.light.primary,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  mapButton: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
+    borderWidth: 1,
+    flexDirection: "row",
+    marginTop: 10,
+    minHeight: 74,
+    paddingHorizontal: 12,
+  },
+  mapButtonSelected: {
+    backgroundColor: "#EAF7F1",
+    borderColor: brand.colors.light.mint,
+  },
+  mapButtonIcon: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: "center",
+    width: 36,
+  },
+  mapButtonCopy: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  mapButtonTitle: {
+    color: brand.colors.light.ink,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  mapButtonSubtext: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  mapButtonAction: {
+    color: brand.colors.light.primary,
+    fontSize: 12,
+    fontWeight: "800",
+  },
   secondaryButton: {
     alignItems: "center",
     backgroundColor: brand.colors.light.surface,
@@ -612,9 +718,19 @@ const styles = StyleSheet.create({
   },
   defaultToggle: {
     alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderColor: brand.colors.light.border,
+    borderRadius: brand.radius.medium,
+    borderWidth: 1,
     flexDirection: "row",
     gap: 10,
     marginTop: 18,
+    minHeight: 54,
+    paddingHorizontal: 14,
+  },
+  defaultToggleSelected: {
+    backgroundColor: "#EAF7F1",
+    borderColor: brand.colors.light.mint,
   },
   checkbox: {
     borderColor: brand.colors.light.border,
@@ -624,14 +740,29 @@ const styles = StyleSheet.create({
     width: 20,
   },
   checkboxChecked: {
-    backgroundColor: brand.colors.light.primary,
-    borderColor: brand.colors.light.primary,
+    alignItems: "center",
+    backgroundColor: brand.colors.light.mint,
+    borderColor: brand.colors.light.mint,
+    justifyContent: "center",
+  },
+  checkboxTick: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+    lineHeight: 17,
   },
   defaultToggleText: {
     color: brand.colors.light.ink,
     flex: 1,
     fontSize: 14,
     fontWeight: "600",
+  },
+  defaultHint: {
+    color: brand.colors.light.inkMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 8,
+    paddingHorizontal: 2,
   },
   formActions: {
     flexDirection: "row",
@@ -663,5 +794,8 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "800",
+  },
+  buttonDisabled: {
+    opacity: 0.55,
   },
 });

@@ -16,6 +16,7 @@ type ScopedLocation = {
 };
 
 let socket: Socket | null = null;
+let socketIsAuthorized = false;
 
 function getSocket(): Socket {
   if (!socket) {
@@ -28,8 +29,41 @@ function getSocket(): Socket {
           .catch(() => callback({}));
       },
     });
+    socket.on('connect', () => {
+      socketIsAuthorized = false;
+    });
+    socket.on('socket:ready', () => {
+      socketIsAuthorized = true;
+    });
+    socket.on('disconnect', () => {
+      socketIsAuthorized = false;
+    });
   }
   return socket;
+}
+
+/**
+ * The API authorises a socket asynchronously. Sending a room join immediately
+ * after `connect()` can race that work and be ignored by the server, which
+ * used to make new orders appear only on the next polling cycle. Queue joins
+ * until the server explicitly confirms the authenticated socket is ready.
+ */
+function joinWhenAuthorized(
+  connection: Socket,
+  event: 'join:order' | 'join:restaurant' | 'join:driver',
+  id: string,
+) {
+  const join = () => connection.emit(event, id);
+  const onReady = () => join();
+
+  connection.on('socket:ready', onReady);
+  if (connection.connected && socketIsAuthorized) {
+    join();
+  } else if (!connection.connected) {
+    connection.connect();
+  }
+
+  return () => connection.off('socket:ready', onReady);
 }
 
 export function useOrderSocket(orderId: string | null) {
@@ -41,8 +75,7 @@ export function useOrderSocket(orderId: string | null) {
     if (!orderId) return;
 
     const s = getSocket();
-    s.connect();
-    s.emit('join:order', orderId);
+    const stopJoining = joinWhenAuthorized(s, 'join:order', orderId);
 
     const handler = (data: { id?: string }) => {
       if (data.id === orderId) setOrderUpdate(data);
@@ -51,6 +84,7 @@ export function useOrderSocket(orderId: string | null) {
     s.on('order:updated', handler);
 
     return () => {
+      stopJoining();
       s.off('order:updated', handler);
     };
   }, [orderId]);
@@ -86,8 +120,7 @@ export function useDriverLocation(
       });
 
     const s = getSocket();
-    s.connect();
-    s.emit('join:order', orderId);
+    const stopJoining = joinWhenAuthorized(s, 'join:order', orderId);
 
     const handler = (data: {
       orderId?: string;
@@ -109,6 +142,7 @@ export function useDriverLocation(
 
     return () => {
       cancelled = true;
+      stopJoining();
       s.off('driver:location', handler);
     };
   }, [orderId, enabled]);
@@ -130,8 +164,7 @@ export function useRestaurantSocket<T extends { id: string }>(
     if (!restaurantId) return;
 
     const s = getSocket();
-    s.connect();
-    s.emit('join:restaurant', restaurantId);
+    const stopJoining = joinWhenAuthorized(s, 'join:restaurant', restaurantId);
 
     const handler = (data: T) => {
       setOrderUpdate(data);
@@ -140,6 +173,7 @@ export function useRestaurantSocket<T extends { id: string }>(
     s.on('order:updated', handler);
 
     return () => {
+      stopJoining();
       s.off('order:updated', handler);
     };
   }, [restaurantId]);
@@ -159,8 +193,7 @@ export function useRestaurantDriverLocation(restaurantId: string | null) {
     }
 
     const s = getSocket();
-    s.connect();
-    s.emit('join:restaurant', restaurantId);
+    const stopJoining = joinWhenAuthorized(s, 'join:restaurant', restaurantId);
 
     const handler = (data: {
       restaurantId?: string;
@@ -180,6 +213,7 @@ export function useRestaurantDriverLocation(restaurantId: string | null) {
 
     s.on('driver:location', handler);
     return () => {
+      stopJoining();
       s.off('driver:location', handler);
     };
   }, [restaurantId]);
@@ -194,27 +228,41 @@ export function useDriverSocket(driverId: string | null) {
   const [incomingOrder, setIncomingOrder] = useState<Record<string, unknown> | null>(
     null,
   );
+  const [revokedOffer, setRevokedOffer] = useState<{
+    orderId?: string;
+    reason?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!driverId) return;
 
     const s = getSocket();
-    s.connect();
-    s.emit('join:driver', driverId);
+    const stopJoining = joinWhenAuthorized(s, 'join:driver', driverId);
 
     const handler = (data: Record<string, unknown>) => {
       setIncomingOrder(data);
     };
+    const revocationHandler = (data: { orderId?: string; reason?: string }) => {
+      setIncomingOrder((current) =>
+        current?.id === data.orderId ? null : current,
+      );
+      setRevokedOffer(data);
+    };
 
     s.on('driver:assigned', handler);
+    s.on('driver:offer-revoked', revocationHandler);
 
     return () => {
+      stopJoining();
       s.off('driver:assigned', handler);
+      s.off('driver:offer-revoked', revocationHandler);
     };
   }, [driverId]);
 
   return {
     incomingOrder,
     clearIncomingOrder: () => setIncomingOrder(null),
+    revokedOffer,
+    clearRevokedOffer: () => setRevokedOffer(null),
   };
 }

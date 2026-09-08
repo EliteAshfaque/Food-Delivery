@@ -3,9 +3,12 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
 import { AccountStatus, OrderStatus, UserRole } from '@food-delivery/types';
 import { schema } from '../db/relations';
@@ -26,13 +29,66 @@ import {
 } from './dto/operations.dto';
 
 const activeDeliveryStatuses = [OrderStatus.READY, OrderStatus.PICKED_UP];
+const pushRetryIntervalMs = 30_000;
+const pushRetryBaseDelayMs = 30_000;
+const pushRetryMaxDelayMs = 15 * 60_000;
+const pushRetryMaxAttempts = 5;
+const pushRetryBatchSize = 50;
+const pushRequestTimeoutMs = 10_000;
+
+type ExpoPushTicket = {
+  status?: 'ok' | 'error';
+  id?: string;
+  message?: string;
+  details?: { error?: string };
+};
+
+type ExpoPushResponse = {
+  data?: ExpoPushTicket | ExpoPushTicket[];
+  errors?: Array<{ code?: string; message?: string }>;
+};
+
+class PushDeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly unregisterDevice = false,
+  ) {
+    super(message);
+    this.name = 'PushDeliveryError';
+  }
+}
 
 @Injectable()
-export class OperationsService {
+export class OperationsService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(OperationsService.name);
+  private readonly pushDeliveriesInFlight = new Set<string>();
+  private pushRetryTimer?: ReturnType<typeof setInterval>;
+
   constructor(
     @Inject('DB') private readonly db: NeonDatabase<typeof schema>,
     private readonly ordersGateway: OrdersGateway,
   ) {}
+
+  onModuleInit() {
+    const runRetrySweep = () => {
+      void this.retryPendingPushDeliveries().catch((error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : 'Unknown retry worker error';
+        this.logger.warn(`Could not retry queued push deliveries: ${message}`);
+      });
+    };
+
+    // Recover rows left QUEUED/RETRYING by a process restart, then keep the
+    // bounded retry loop running without blocking order or admin operations.
+    runRetrySweep();
+    this.pushRetryTimer = setInterval(runRetrySweep, pushRetryIntervalMs);
+    this.pushRetryTimer.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.pushRetryTimer) clearInterval(this.pushRetryTimer);
+  }
 
   async listDrivers() {
     const drivers = await this.db
@@ -67,6 +123,7 @@ export class OperationsService {
         and(
           inArray(tables.orders.status, activeDeliveryStatuses),
           sql`${tables.orders.driverId} is not null`,
+          isNull(tables.orders.cancellationRequestedAt),
         ),
       );
     const byDriver = new Map(active.map((order) => [order.driverId!, order]));
@@ -123,6 +180,11 @@ export class OperationsService {
         'Only ready-for-pickup orders can be reassigned',
       );
     }
+    if (order.cancellationRequestedAt) {
+      throw new ConflictException(
+        'This order is being cancelled and cannot be reassigned',
+      );
+    }
     const driver = await this.requireDriver(dto.driverId);
     if (!driver.isOnline || driver.accountStatus !== AccountStatus.ACTIVE) {
       throw new BadRequestException(
@@ -136,6 +198,7 @@ export class OperationsService {
         and(
           eq(tables.orders.driverId, dto.driverId),
           inArray(tables.orders.status, activeDeliveryStatuses),
+          isNull(tables.orders.cancellationRequestedAt),
         ),
       )
       .limit(1);
@@ -144,30 +207,74 @@ export class OperationsService {
         'The selected driver already has an active delivery',
       );
 
-    const [updated] = await this.db
-      .update(tables.orders)
-      .set({
-        driverId: dto.driverId,
-        driverAcceptedAt: null,
-        driverDeclineReason: null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(tables.orders.id, orderId),
-          eq(tables.orders.status, OrderStatus.READY),
-        ),
-      )
-      .returning();
+    // Reassignment is an intervention, but it must not overwrite a driver
+    // acceptance or a previous reassignment that happened after the order was
+    // read above. Compare the full prior assignment state in the write itself.
+    const expectedDriverCondition = order.driverId
+      ? eq(tables.orders.driverId, order.driverId)
+      : isNull(tables.orders.driverId);
+    const expectedAcceptanceCondition = order.driverAcceptedAt
+      ? eq(tables.orders.driverAcceptedAt, order.driverAcceptedAt)
+      : isNull(tables.orders.driverAcceptedAt);
+
+    const updated = await this.db.transaction(async (tx) => {
+      const [nextOrder] = await tx
+        .update(tables.orders)
+        .set({
+          driverId: dto.driverId,
+          driverAcceptedAt: null,
+          driverDeclineReason: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(tables.orders.id, orderId),
+            eq(tables.orders.status, OrderStatus.READY),
+            expectedDriverCondition,
+            expectedAcceptanceCondition,
+            isNull(tables.orders.cancellationRequestedAt),
+          ),
+        )
+        .returning();
+      if (!nextOrder) return null;
+
+      await tx.insert(tables.orderEvents).values({
+        orderId,
+        actorId,
+        type: 'ORDER_DRIVER_REASSIGNED',
+        metadata: {
+          previousDriverId: order.driverId,
+          driverId: dto.driverId,
+          note: dto.note?.trim() || null,
+        },
+      });
+      return nextOrder;
+    });
     if (!updated)
       throw new ConflictException('Order changed; refresh and try again');
-    await this.recordEvent(orderId, actorId, 'ORDER_DRIVER_REASSIGNED', {
-      previousDriverId: order.driverId,
-      driverId: dto.driverId,
-      note: dto.note?.trim() || null,
-    });
     this.ordersGateway.emitDriverAssigned(dto.driverId, updated);
     this.ordersGateway.emitOrderUpdate(updated);
+    void this.queueOrderNotification(
+      dto.driverId,
+      updated.id,
+      'Delivery reassigned',
+      'A ready pickup has been assigned to you. Open the app to accept or decline.',
+    );
+    if (order.driverId && order.driverId !== dto.driverId) {
+      this.ordersGateway.emitDriverOfferRevoked(
+        order.driverId,
+        updated.id,
+        order.driverAcceptedAt
+          ? 'This delivery was reassigned by operations.'
+          : 'This pickup offer was reassigned by operations.',
+      );
+      void this.queueOrderNotification(
+        order.driverId,
+        updated.id,
+        'Delivery reassigned',
+        'This delivery is no longer assigned to you.',
+      );
+    }
     return updated;
   }
 
@@ -395,9 +502,8 @@ export class OperationsService {
       })
       .returning();
     // Sending is intentionally asynchronous: a provider outage never blocks an
-    // order intervention. A scheduled worker retries QUEUED/RETRYING rows.
-    if (recipient.pushToken)
-      void this.deliverPush(delivery.id, recipient.pushToken);
+    // order intervention. The retry worker recovers QUEUED/RETRYING rows.
+    if (recipient.pushToken) this.queuePushDelivery(delivery.id);
     return delivery;
   }
 
@@ -425,7 +531,7 @@ export class OperationsService {
     const messages: Record<string, { title: string; body: string }> = {
       CONFIRMED: {
         title: 'Order confirmed',
-        body: 'The restaurant has received your order.',
+        body: 'Your payment is confirmed. The restaurant will begin preparing shortly.',
       },
       PREPARING: {
         title: 'Your food is being prepared',
@@ -508,9 +614,16 @@ export class OperationsService {
       throw new BadRequestException('Recipient has no registered push token');
     await this.db
       .update(tables.notificationDeliveries)
-      .set({ status: 'RETRYING', lastError: null, updatedAt: new Date() })
+      .set({
+        status: 'RETRYING',
+        // An explicit operations retry starts a fresh, bounded retry sequence.
+        attempts: 0,
+        lastError: null,
+        providerMessageId: null,
+        updatedAt: new Date(),
+      })
       .where(eq(tables.notificationDeliveries.id, id));
-    void this.deliverPush(id, recipient.pushToken);
+    this.queuePushDelivery(id, true);
     return { queued: true };
   }
 
@@ -645,70 +758,339 @@ export class OperationsService {
     );
   }
 
-  private async deliverPush(deliveryId: string, storedToken: string) {
-    const token = storedToken.replace(/^(android|ios):/, '');
+  /**
+   * Sends one pending delivery. A database status transition acts as a short
+   * lease so multiple API instances do not send the same queued row together.
+   */
+  private queuePushDelivery(deliveryId: string, force = false) {
+    void this.deliverPush(deliveryId, force).catch((error: unknown) => {
+      const message =
+        error instanceof Error ? error.message : 'Unknown push delivery error';
+      this.logger.warn(
+        `Could not process push delivery ${deliveryId}: ${message}`,
+      );
+    });
+  }
+
+  private async deliverPush(deliveryId: string, force = false) {
+    if (this.pushDeliveriesInFlight.has(deliveryId)) return;
+    this.pushDeliveriesInFlight.add(deliveryId);
+
+    let storedToken: string | null = null;
+    let claimed: typeof tables.notificationDeliveries.$inferSelect | undefined;
+
     try {
-      if (
-        !token.startsWith('ExponentPushToken[') &&
-        !token.startsWith('ExpoPushToken[')
-      ) {
-        throw new Error(
-          'Registered token requires configured FCM/APNs provider',
-        );
-      }
       const [delivery] = await this.db
         .select()
         .from(tables.notificationDeliveries)
         .where(eq(tables.notificationDeliveries.id, deliveryId));
-      if (!delivery) return;
-      const response = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          to: token,
-          title: delivery.title,
-          body: delivery.body,
-          data: delivery.payload ?? {},
-          sound: 'default',
-        }),
-      });
-      if (!response.ok)
-        throw new Error(`Push provider returned ${response.status}`);
-      const result = (await response.json()) as {
-        data?: { id?: string; status?: string; message?: string };
-      };
-      if (result.data?.status === 'error')
-        throw new Error(
-          result.data.message || 'Push provider rejected notification',
-        );
+      if (!delivery || !this.isPendingPushDelivery(delivery.status)) return;
+
+      if (delivery.attempts >= pushRetryMaxAttempts && !force) {
+        await this.markPushRetryLimitReached(deliveryId);
+        return;
+      }
+
+      if (!force && !this.isPushRetryDue(delivery)) return;
+
+      claimed = await this.claimPushDelivery(delivery, force);
+      if (!claimed) return;
+
+      storedToken = await this.getRecipientPushToken(claimed.recipientId);
+      if (!storedToken) {
+        throw new PushDeliveryError('No registered push token', false);
+      }
+
+      const { token, platform } = this.parseStoredPushToken(storedToken);
+      const ticket = await this.sendExpoPush(claimed, token, platform);
+
       await this.db
         .update(tables.notificationDeliveries)
         .set({
+          // SENT means Expo accepted the message. A provider receipt is still
+          // required before it can be considered device-delivered.
           status: 'SENT',
-          attempts: sql`${tables.notificationDeliveries.attempts} + 1`,
-          providerMessageId: result.data?.id ?? null,
+          attempts: claimed.attempts + 1,
+          providerMessageId: ticket.id ?? null,
           sentAt: new Date(),
           updatedAt: new Date(),
           lastError: null,
         })
-        .where(eq(tables.notificationDeliveries.id, deliveryId));
+        .where(
+          and(
+            eq(tables.notificationDeliveries.id, deliveryId),
+            eq(tables.notificationDeliveries.status, 'RETRYING'),
+          ),
+        );
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message.slice(0, 500)
-          : 'Unknown push delivery failure';
+      const pushError = this.toPushDeliveryError(error);
+      await this.markPushDeliveryFailure(
+        deliveryId,
+        claimed,
+        pushError,
+        storedToken,
+      );
+    } finally {
+      this.pushDeliveriesInFlight.delete(deliveryId);
+    }
+  }
+
+  private async retryPendingPushDeliveries() {
+    const pending = await this.db
+      .select({
+        id: tables.notificationDeliveries.id,
+        status: tables.notificationDeliveries.status,
+        attempts: tables.notificationDeliveries.attempts,
+        updatedAt: tables.notificationDeliveries.updatedAt,
+      })
+      .from(tables.notificationDeliveries)
+      .where(
+        inArray(tables.notificationDeliveries.status, ['QUEUED', 'RETRYING']),
+      )
+      .orderBy(asc(tables.notificationDeliveries.updatedAt))
+      .limit(pushRetryBatchSize);
+
+    for (const delivery of pending) {
+      if (delivery.attempts >= pushRetryMaxAttempts) {
+        await this.markPushRetryLimitReached(delivery.id);
+        continue;
+      }
+      if (!this.isPushRetryDue(delivery)) continue;
+      await this.deliverPush(delivery.id);
+    }
+  }
+
+  private isPendingPushDelivery(status: string) {
+    return status === 'QUEUED' || status === 'RETRYING';
+  }
+
+  private isPushRetryDue(delivery: {
+    status: string;
+    attempts: number;
+    updatedAt: Date;
+  }) {
+    if (delivery.status === 'QUEUED') return true;
+    const exponent = Math.max(delivery.attempts - 1, 0);
+    const delay = Math.min(
+      pushRetryBaseDelayMs * 2 ** exponent,
+      pushRetryMaxDelayMs,
+    );
+    return delivery.updatedAt.getTime() + delay <= Date.now();
+  }
+
+  private async claimPushDelivery(
+    delivery: typeof tables.notificationDeliveries.$inferSelect,
+    force: boolean,
+  ) {
+    const retryCondition = force
+      ? inArray(tables.notificationDeliveries.status, ['QUEUED', 'RETRYING'])
+      : delivery.status === 'QUEUED'
+        ? eq(tables.notificationDeliveries.status, 'QUEUED')
+        : and(
+            eq(tables.notificationDeliveries.status, 'RETRYING'),
+            lte(
+              tables.notificationDeliveries.updatedAt,
+              new Date(
+                Date.now() -
+                  Math.min(
+                    pushRetryBaseDelayMs *
+                      2 ** Math.max(delivery.attempts - 1, 0),
+                    pushRetryMaxDelayMs,
+                  ),
+              ),
+            ),
+          );
+
+    const [claimed] = await this.db
+      .update(tables.notificationDeliveries)
+      .set({ status: 'RETRYING', updatedAt: new Date() })
+      .where(
+        and(eq(tables.notificationDeliveries.id, delivery.id), retryCondition),
+      )
+      .returning();
+    return claimed;
+  }
+
+  private async getRecipientPushToken(recipientId: string | null) {
+    if (!recipientId) return null;
+    const [recipient] = await this.db
+      .select({ pushToken: tables.user.pushToken })
+      .from(tables.user)
+      .where(eq(tables.user.id, recipientId));
+    return recipient?.pushToken ?? null;
+  }
+
+  private parseStoredPushToken(storedToken: string): {
+    token: string;
+    platform: 'android' | 'ios';
+  } {
+    const platform = storedToken.startsWith('ios:') ? 'ios' : 'android';
+    const token = storedToken.replace(/^(android|ios):/, '');
+    if (
+      !token.startsWith('ExponentPushToken[') &&
+      !token.startsWith('ExpoPushToken[')
+    ) {
+      throw new PushDeliveryError(
+        'Registered token requires configured FCM/APNs provider',
+        false,
+      );
+    }
+    return { token, platform };
+  }
+
+  private async sendExpoPush(
+    delivery: typeof tables.notificationDeliveries.$inferSelect,
+    token: string,
+    platform: 'android' | 'ios',
+  ) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), pushRequestTimeoutMs);
+    try {
+      let response: Response;
+      try {
+        response = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            to: token,
+            title: delivery.title,
+            body: delivery.body,
+            data: delivery.payload ?? {},
+            sound: 'default',
+            ...(platform === 'android'
+              ? { channelId: 'active-order-tracking' }
+              : {}),
+          }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error && error.name === 'AbortError'
+            ? 'Expo push provider timed out'
+            : 'Could not reach Expo push provider';
+        throw new PushDeliveryError(message, true);
+      }
+
+      if (!response.ok) {
+        throw new PushDeliveryError(
+          `Expo push provider returned ${response.status}`,
+          response.status === 429 || response.status >= 500,
+        );
+      }
+
+      let result: ExpoPushResponse;
+      try {
+        result = (await response.json()) as ExpoPushResponse;
+      } catch {
+        throw new PushDeliveryError(
+          'Expo push provider returned invalid JSON',
+          true,
+        );
+      }
+
+      // Expo accepts a single message object and may return either a single
+      // ticket or an array. Normalize both forms before deciding the outcome.
+      const ticket = Array.isArray(result.data) ? result.data[0] : result.data;
+      if (!ticket) {
+        throw new PushDeliveryError(
+          'Expo push provider returned no delivery ticket',
+          true,
+        );
+      }
+      if (ticket.status !== 'ok') {
+        const code = ticket.details?.error;
+        throw new PushDeliveryError(
+          code
+            ? `Expo push ticket rejected (${code})`
+            : 'Expo push ticket rejected',
+          this.isTransientExpoError(code),
+          code === 'DeviceNotRegistered',
+        );
+      }
+      return ticket;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private isTransientExpoError(code: string | undefined) {
+    return (
+      code === 'MessageRateExceeded' ||
+      code === 'InternalServerError' ||
+      code === 'ServiceUnavailable'
+    );
+  }
+
+  private toPushDeliveryError(error: unknown) {
+    if (error instanceof PushDeliveryError) return error;
+    const message =
+      error instanceof Error
+        ? error.message.slice(0, 500)
+        : 'Unknown push delivery failure';
+    // Database/network failures are usually transient; the bounded retry loop
+    // prevents an unavailable provider from turning into an infinite job.
+    return new PushDeliveryError(message, true);
+  }
+
+  private async markPushRetryLimitReached(deliveryId: string) {
+    await this.db
+      .update(tables.notificationDeliveries)
+      .set({
+        status: 'FAILED',
+        lastError: 'Push retry limit reached',
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(tables.notificationDeliveries.id, deliveryId),
+          inArray(tables.notificationDeliveries.status, ['QUEUED', 'RETRYING']),
+        ),
+      );
+  }
+
+  private async markPushDeliveryFailure(
+    deliveryId: string,
+    claimed: typeof tables.notificationDeliveries.$inferSelect | undefined,
+    error: PushDeliveryError,
+    storedToken: string | null,
+  ) {
+    // If the row was not claimed (for example, another API instance won the
+    // lease), it must not be changed by this worker.
+    if (!claimed) return;
+
+    const attempts = claimed.attempts + 1;
+    const shouldRetry = error.retryable && attempts < pushRetryMaxAttempts;
+    await this.db
+      .update(tables.notificationDeliveries)
+      .set({
+        status: shouldRetry ? 'RETRYING' : 'FAILED',
+        attempts,
+        providerMessageId: null,
+        lastError: error.message.slice(0, 500),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(tables.notificationDeliveries.id, deliveryId),
+          eq(tables.notificationDeliveries.status, 'RETRYING'),
+        ),
+      );
+
+    if (error.unregisterDevice && claimed.recipientId && storedToken) {
+      // Do not erase a fresh token registered by the user while this older
+      // request was in flight.
       await this.db
-        .update(tables.notificationDeliveries)
-        .set({
-          status: 'FAILED',
-          attempts: sql`${tables.notificationDeliveries.attempts} + 1`,
-          lastError: message,
-          updatedAt: new Date(),
-        })
-        .where(eq(tables.notificationDeliveries.id, deliveryId));
+        .update(tables.user)
+        .set({ pushToken: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(tables.user.id, claimed.recipientId),
+            eq(tables.user.pushToken, storedToken),
+          ),
+        );
     }
   }
 

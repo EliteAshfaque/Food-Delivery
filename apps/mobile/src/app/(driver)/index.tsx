@@ -51,7 +51,12 @@ export default function DriverHomeScreen() {
   const enter = (delay: number, duration = 340) =>
     reduceMotion ? undefined : FadeInDown.duration(duration).delay(delay);
 
-  const { incomingOrder, clearIncomingOrder } = useDriverSocket(user?.id ?? null);
+  const {
+    incomingOrder,
+    clearIncomingOrder,
+    revokedOffer,
+    clearRevokedOffer,
+  } = useDriverSocket(user?.id ?? null);
   const [dismissedIncomingOrderId, setDismissedIncomingOrderId] = useState<
     string | null
   >(null);
@@ -80,6 +85,20 @@ export default function DriverHomeScreen() {
     refetchInterval: 10000,
   });
 
+  // A driver can miss a socket event while the app is closed. Keep pending
+  // offers server-backed so the driver can still accept or decline them after
+  // reopening the app; otherwise that offer would reserve the driver forever.
+  const {
+    data: pendingOffers = [],
+    error: pendingOffersError,
+    isError: pendingOffersIsError,
+    refetch: refetchPendingOffers,
+  } = useQuery<DriverOrder[]>({
+    queryKey: ['driver-pending-offers'],
+    queryFn: () => api.get('/driver/orders/offers').then((res) => res.data),
+    refetchInterval: 8000,
+  });
+
   const { mutate: toggleOnline, isPending: togglingOnline } = useMutation({
     mutationFn: () =>
       api.patch<{ isOnline: boolean }>('/driver/online').then((res) => res.data),
@@ -98,6 +117,7 @@ export default function DriverHomeScreen() {
       setDismissedIncomingOrderId(orderId);
       clearIncomingOrder();
       queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['driver-pending-offers'] });
     },
     onError: (error) => {
       Alert.alert('Could not decline delivery', getApiErrorMessage(error));
@@ -111,6 +131,7 @@ export default function DriverHomeScreen() {
       if (pendingOrder) setDismissedIncomingOrderId(pendingOrder.id);
       clearIncomingOrder();
       queryClient.invalidateQueries({ queryKey: ['driver-active-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['driver-pending-offers'] });
       router.push('/(driver)/active');
     },
     onError: (error) => {
@@ -122,12 +143,35 @@ export default function DriverHomeScreen() {
   useEffect(() => {
     if (!incomingOrder?.id) return;
     void refetchActive();
-  }, [incomingOrder, refetchActive]);
+    void refetchPendingOffers();
+  }, [incomingOrder, refetchActive, refetchPendingOffers]);
 
-  const pendingOrder =
+  // Operations can reassign an unanswered offer, or the driver can release it
+  // by going offline. Drop the modal immediately instead of letting a stale
+  // Accept action fail after the rider has already made a decision.
+  useEffect(() => {
+    if (!revokedOffer?.orderId) return;
+    // useDriverSocket has already removed only the revoked offer. Do not mark
+    // its id permanently dismissed here: dispatch may legitimately issue a
+    // fresh lease for the same order to this rider after the timeout.
+    clearRevokedOffer();
+    void refetchActive();
+    void refetchPendingOffers();
+  }, [
+    clearRevokedOffer,
+    refetchActive,
+    refetchPendingOffers,
+    revokedOffer,
+  ]);
+
+  const socketOffer =
     incomingOrder?.id && incomingOrder.id !== dismissedIncomingOrderId
       ? (incomingOrder as unknown as DriverOrder)
       : null;
+  const recoveredOffer = pendingOffers.find(
+    (offer) => offer.id !== dismissedIncomingOrderId,
+  );
+  const pendingOrder = socketOffer ?? recoveredOffer ?? null;
 
   const isOnline = status?.isOnline ?? false;
   const activeOrder = activeOrders[0] ?? null;
@@ -266,12 +310,13 @@ export default function DriverHomeScreen() {
           </Animated.View>
         ) : null}
 
-        {statusIsError || activeOrdersIsError ? (
+        {statusIsError || activeOrdersIsError || pendingOffersIsError ? (
           <RequestErrorState
-            error={statusError ?? activeOrdersError}
+            error={statusError ?? activeOrdersError ?? pendingOffersError}
             onRetry={() => {
               void refetchStatus();
               void refetchActive();
+              void refetchPendingOffers();
             }}
             title="Some delivery information is unavailable"
           />

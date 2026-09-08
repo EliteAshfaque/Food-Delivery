@@ -13,6 +13,7 @@ import {
   eq,
   ilike,
   inArray,
+  isNull,
   ne,
   or,
   sql,
@@ -167,6 +168,9 @@ export class AdminService {
           accountStatusReason: tables.user.accountStatusReason,
           accountStatusUpdatedAt: tables.user.accountStatusUpdatedAt,
           isOnline: tables.user.isOnline,
+          // Administrators need to know whether a recipient can receive a
+          // mobile push, but must never receive the token value itself.
+          hasPushToken: sql<boolean>`${tables.user.pushToken} is not null`,
           createdAt: tables.user.createdAt,
           updatedAt: tables.user.updatedAt,
         })
@@ -792,7 +796,11 @@ export class AdminService {
       (nextRole !== UserRole.ADMIN || nextStatus !== AccountStatus.ACTIVE);
     const activeDriverOrders = removesDriverAccess
       ? await this.db
-          .select({ id: tables.orders.id, status: tables.orders.status })
+          .select({
+            id: tables.orders.id,
+            status: tables.orders.status,
+            driverAcceptedAt: tables.orders.driverAcceptedAt,
+          })
           .from(tables.orders)
           .where(
             and(
@@ -801,6 +809,7 @@ export class AdminService {
                 OrderStatus.READY,
                 OrderStatus.PICKED_UP,
               ]),
+              isNull(tables.orders.cancellationRequestedAt),
             ),
           )
       : [];
@@ -944,19 +953,47 @@ export class AdminService {
     for (const activeOrder of activeDriverOrders) {
       // Include the old driver and READY state in the update condition to avoid
       // unassigning an order that changed state during this admin action.
-      const [unassignedOrder] = await this.db
-        .update(tables.orders)
-        .set({ driverId: null, updatedAt: new Date() })
-        .where(
-          and(
-            eq(tables.orders.id, activeOrder.id),
-            eq(tables.orders.driverId, targetUserId),
-            eq(tables.orders.status, OrderStatus.READY),
-          ),
-        )
-        .returning();
+      const unassignedOrder = await this.db.transaction(async (tx) => {
+        const [nextOrder] = await tx
+          .update(tables.orders)
+          .set({
+            driverId: null,
+            driverAcceptedAt: null,
+            driverDeclineReason: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(tables.orders.id, activeOrder.id),
+              eq(tables.orders.driverId, targetUserId),
+              eq(tables.orders.status, OrderStatus.READY),
+              isNull(tables.orders.cancellationRequestedAt),
+            ),
+          )
+          .returning();
+        if (!nextOrder) return null;
+
+        await tx.insert(tables.orderEvents).values({
+          orderId: nextOrder.id,
+          actorId,
+          type: 'ORDER_DRIVER_UNASSIGNED',
+          metadata: {
+            previousDriverId: targetUserId,
+            reason: 'DRIVER_ACCOUNT_UNAVAILABLE',
+          },
+        });
+        return nextOrder;
+      });
 
       if (!unassignedOrder) continue;
+
+      this.ordersGateway.emitDriverOfferRevoked(
+        targetUserId,
+        unassignedOrder.id,
+        activeOrder.driverAcceptedAt
+          ? 'This delivery was released because your driver account is unavailable.'
+          : 'This pickup offer was released because your driver account is unavailable.',
+      );
 
       const reassigned = await this.driverService.assignDriver(
         activeOrder.id,
@@ -1254,6 +1291,7 @@ export class AdminService {
     const updated = await this.paymentsService.cancelAndRefundOrder(
       orderId,
       dto.reason.trim(),
+      order.status,
     );
     if (normalizedReason) {
       await this.db

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -75,7 +75,6 @@ export default function CustomerCartScreen() {
     decrementItem,
     removeItem,
     clearCart,
-    totalItems,
     totalPrice,
   } = useCartStore();
   const subtotal = totalPrice();
@@ -86,23 +85,21 @@ export default function CustomerCartScreen() {
       api.get<UserAddress[]>("/addresses").then((res) => res.data),
   });
 
-  useEffect(() => {
-    if (!savedAddresses.data || selectedAddressId || isOneTimeMode) return;
-    const preferred =
-      savedAddresses.data.find((item) => item.isDefault) ??
-      savedAddresses.data[0];
-    if (!preferred) return;
-    setSelectedAddressId(preferred.id);
-    setDeliveryAddress(preferred.addressLine);
-    setDeliveryCoords({
-      latitude: preferred.latitude,
-      longitude: preferred.longitude,
-    });
-  }, [savedAddresses.data, selectedAddressId, isOneTimeMode]);
-
-  const selectedSaved = savedAddresses.data?.find(
-    (item) => item.id === selectedAddressId,
-  );
+  // A saved address is derived from the latest query data instead of copying it
+  // into local state after render. This keeps a newly marked default address
+  // immediately usable and avoids a transient empty delivery form on load.
+  const selectedSaved = isOneTimeMode
+    ? undefined
+    : savedAddresses.data?.find((item) => item.id === selectedAddressId) ??
+      savedAddresses.data?.find((item) => item.isDefault) ??
+      savedAddresses.data?.[0];
+  const activeDeliveryAddress = selectedSaved?.addressLine ?? deliveryAddress;
+  const activeDeliveryCoords = selectedSaved
+    ? {
+        latitude: selectedSaved.latitude,
+        longitude: selectedSaved.longitude,
+      }
+    : deliveryCoords;
   // Offers are scoped to the restaurant that was in the cart when they were
   // entered. Deriving the visible value prevents a code from being carried to
   // a replacement cart without an effect that resets form state after render.
@@ -166,7 +163,7 @@ export default function CustomerCartScreen() {
       if (!restaurantId) throw new Error("No restaurant selected");
       const { data } = await api.post("/orders", {
         restaurantId,
-        deliveryAddress: deliveryAddress.trim(),
+        deliveryAddress: activeDeliveryAddress.trim(),
         deliveryLatitude: coords.latitude,
         deliveryLongitude: coords.longitude,
         items: items.map((item) => ({
@@ -179,7 +176,7 @@ export default function CustomerCartScreen() {
       if (saveAfterOrder && isOneTimeMode) {
         await api.post("/addresses", {
           label: "Other",
-          addressLine: deliveryAddress.trim(),
+          addressLine: activeDeliveryAddress.trim(),
           latitude: coords.latitude,
           longitude: coords.longitude,
           isDefault: (savedAddresses.data?.length ?? 0) === 0,
@@ -292,8 +289,8 @@ export default function CustomerCartScreen() {
     }
 
     const deliveryError = validateDeliveryDetails({
-      address: deliveryAddress,
-      coordinates: deliveryCoords,
+      address: activeDeliveryAddress,
+      coordinates: activeDeliveryCoords,
     });
     if (deliveryError) {
       Alert.alert("Delivery details needed", deliveryError);
@@ -302,7 +299,7 @@ export default function CustomerCartScreen() {
 
     // validateDeliveryDetails has confirmed the pin, and this guard narrows
     // the value for the request payload as well.
-    if (!deliveryCoords) return;
+    if (!activeDeliveryCoords) return;
     if (appliedOfferCode && offerQuote.isError) {
       Alert.alert(
         "Offer needs attention",
@@ -311,7 +308,7 @@ export default function CustomerCartScreen() {
       return;
     }
 
-    placeOrder(deliveryCoords);
+    placeOrder(activeDeliveryCoords);
   }
 
   function applyOffer() {
@@ -355,9 +352,14 @@ export default function CustomerCartScreen() {
   async function handleMapLocationConfirm(coordinates: {
     latitude: number;
     longitude: number;
-  }) {
+  }, selectedAddressLabel?: string) {
     setDeliveryCoords(coordinates);
     setMapPickerVisible(false);
+
+    if (selectedAddressLabel?.trim()) {
+      setDeliveryAddress(selectedAddressLabel.trim());
+      return;
+    }
 
     try {
       const detectedAddress = await getAddressForCoordinates(coordinates);
@@ -666,9 +668,11 @@ export default function CustomerCartScreen() {
         </Pressable>
       </View>
       <LocationPicker
-        initialCoordinates={deliveryCoords}
+        initialCoordinates={activeDeliveryCoords}
         onClose={() => setMapPickerVisible(false)}
-        onConfirm={(coordinates) => void handleMapLocationConfirm(coordinates)}
+        onConfirm={(coordinates, addressLabel) =>
+          void handleMapLocationConfirm(coordinates, addressLabel)
+        }
         title="Delivery location"
         visible={isMapPickerVisible}
       />
@@ -688,7 +692,7 @@ export default function CustomerCartScreen() {
                   onPress={() => applySavedAddress(address)}
                   style={[
                     styles.pickerOption,
-                    selectedAddressId === address.id &&
+                    selectedSaved?.id === address.id &&
                       styles.pickerOptionSelected,
                   ]}
                 >

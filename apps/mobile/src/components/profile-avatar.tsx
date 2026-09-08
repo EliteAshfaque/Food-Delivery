@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -25,6 +25,15 @@ function getInitials(firstName?: string | null, lastName?: string | null) {
 }
 
 export function ProfileAvatar({
+  imageUrl,
+  ...props
+}: ProfileAvatarProps) {
+  // Image failures belong to a particular source. A keyed inner avatar retries
+  // when the profile receives a new URL, without resetting state in an effect.
+  return <ProfileAvatarContent key={imageUrl ?? "initials"} imageUrl={imageUrl} {...props} />;
+}
+
+function ProfileAvatarContent({
   firstName,
   lastName,
   imageUrl,
@@ -35,10 +44,6 @@ export function ProfileAvatar({
   const radius = size / 2;
   const fontSize = Math.round(size * 0.34);
   const showPhoto = Boolean(imageUrl) && !failed;
-
-  useEffect(() => {
-    setFailed(false);
-  }, [imageUrl]);
 
   return (
     <View

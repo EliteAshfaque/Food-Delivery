@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { openSettings } from "expo-linking";
 import {
   ActivityIndicator,
@@ -32,11 +32,29 @@ type EditProfileModalProps = {
  * one primary action. Full-screen is reserved for denser settings later.
  */
 export function EditProfileModal({ visible, onClose }: EditProfileModalProps) {
+  const { user } = useAuth();
+  // A profile edit is a disposable draft. Remounting it for each opening (and
+  // when the authenticated profile changes) initializes the draft from the
+  // latest user without a state-reset effect after render.
+  const draftKey = [
+    visible ? "open" : "closed",
+    user?.id ?? "anonymous",
+    user?.firstName ?? "",
+    user?.lastName ?? "",
+    user?.imageUrl ?? "",
+  ].join("\u0000");
+
+  return <EditProfileModalDraft key={draftKey} onClose={onClose} visible={visible} />;
+}
+
+function EditProfileModalDraft({ visible, onClose }: EditProfileModalProps) {
   const insets = useSafeAreaInsets();
   const { user, updateProfile } = useAuth();
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [firstName, setFirstName] = useState(() => user?.firstName ?? "");
+  const [lastName, setLastName] = useState(() => user?.lastName ?? "");
+  const [imageUrl, setImageUrl] = useState<string | null>(
+    () => user?.imageUrl ?? null,
+  );
   const [saving, setSaving] = useState(false);
 
   const { openImagePicker, isUploading } = useImageUploader("profileImage", {
@@ -52,13 +70,6 @@ export function EditProfileModal({ visible, onClose }: EditProfileModalProps) {
       Alert.alert("Photo upload failed", getApiErrorMessage(error));
     },
   });
-
-  useEffect(() => {
-    if (!visible || !user) return;
-    setFirstName(user.firstName ?? "");
-    setLastName(user.lastName ?? "");
-    setImageUrl(user.imageUrl ?? null);
-  }, [visible, user]);
 
   function pickPhoto() {
     void openImagePicker({

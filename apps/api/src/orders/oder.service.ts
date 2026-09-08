@@ -236,22 +236,11 @@ export class OrdersService {
 
     this.validateTransition(order.status, newStatus, user.role);
 
-    if (
-      user.role === UserRole.RESTAURANT_OWNER &&
-      newStatus === OrderStatus.READY
-    ) {
-      const { available } = await this.driverService.getAvailability();
-      if (!available) {
-        throw new BadRequestException(
-          'No delivery driver is available. Keep the order preparing and try again shortly.',
-        );
-      }
-    }
-
     if (newStatus === OrderStatus.CANCELLED) {
       const cancelled = await this.paymentsService.cancelAndRefundOrder(
         order.id,
         cancellationReason?.trim() || 'Cancelled by restaurant owner',
+        order.status,
       );
       await this.clearTerminalDriverLocation(cancelled.id);
       return cancelled;
@@ -277,14 +266,30 @@ export class OrdersService {
             isNull(schema.orders.cancellationRequestedAt),
           );
 
-    const [updated] = await this.db
-      .update(schema.orders)
-      .set({
-        status: newStatus,
-        updatedAt: new Date(),
-      })
-      .where(statusCondition)
-      .returning();
+    // The visible state and its timeline entry are one business operation.
+    // Keeping them in the same transaction means a timeline failure cannot
+    // leave the app showing a transition that support/admin cannot audit.
+    const updated = await this.db.transaction(async (tx) => {
+      const [nextOrder] = await tx
+        .update(schema.orders)
+        .set({
+          status: newStatus,
+          updatedAt: new Date(),
+        })
+        .where(statusCondition)
+        .returning();
+
+      if (!nextOrder) return null;
+
+      await tx.insert(schema.orderEvents).values({
+        orderId: nextOrder.id,
+        actorId: user.sub,
+        type: 'ORDER_STATUS_CHANGED',
+        metadata: { from: order.status, to: newStatus, actorRole: user.role },
+      });
+
+      return nextOrder;
+    });
 
     if (!updated) {
       throw new ConflictException(
@@ -292,18 +297,20 @@ export class OrdersService {
       );
     }
 
-    await this.db.insert(schema.orderEvents).values({
-      orderId: updated.id,
-      actorId: user.sub,
-      type: 'ORDER_STATUS_CHANGED',
-      metadata: { from: order.status, to: newStatus, actorRole: user.role },
-    });
-
     this.ordersGateway.emitOrderUpdate(updated);
     void this.operationsService.queueCustomerStatusNotification(updated);
 
     if (newStatus === OrderStatus.DELIVERED) {
       await this.clearTerminalDriverLocation(updated.id);
+      // Free capacity should immediately pull the next restaurant-ready order
+      // from the queue. A dispatch failure must not undo a completed delivery.
+      void this.driverService
+        .assignNextQueuedOrder(user.sub)
+        .catch((error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
+          this.logger.warn(`Could not dispatch next queued order: ${message}`);
+        });
     }
 
     // When food is ready, auto-assign an online driver and notify their app

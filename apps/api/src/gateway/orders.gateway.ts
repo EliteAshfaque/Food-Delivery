@@ -98,6 +98,10 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
         email: dbUser.email ?? tokenPayload.email,
         role: dbUser.role,
       };
+      // Room joins are authorised from client.data.user. Signal only after the
+      // asynchronous token/database validation completes so the first join is
+      // not silently dropped on a fast mobile connection.
+      client.emit('socket:ready');
     } catch {
       client.disconnect();
     }
@@ -204,6 +208,7 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
           driverId: schema.orders.driverId,
           restaurantId: schema.orders.restaurantId,
           status: schema.orders.status,
+          cancellationRequestedAt: schema.orders.cancellationRequestedAt,
         })
         .from(schema.orders)
         .where(eq(schema.orders.id, location.orderId));
@@ -211,6 +216,7 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (
         !order ||
         order.driverId !== user.sub ||
+        order.cancellationRequestedAt !== null ||
         (order.status !== 'READY' && order.status !== 'PICKED_UP')
       ) {
         this.emitLocationError(
@@ -316,6 +322,17 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   emitDriverAssigned(driverId: string, order: unknown) {
     this.server.to(`driver:${driverId}`).emit('driver:assigned', order);
+  }
+
+  /**
+   * A pickup offer or active delivery assignment was withdrawn. Keep this
+   * separate from a normal order update: driver home subscribes to the driver
+   * room, not every order room.
+   */
+  emitDriverOfferRevoked(driverId: string, orderId: string, reason: string) {
+    this.server
+      .to(`driver:${driverId}`)
+      .emit('driver:offer-revoked', { orderId, reason });
   }
 
   emitOrderUpdate(order: {

@@ -31,6 +31,8 @@ type OwnerOrder = {
   id: string;
   customerId: string;
   restaurantId: string;
+  driverId: string | null;
+  driverAcceptedAt: string | null;
   status: OrderStatusType;
   totalAmount: string;
   deliveryAddress: string;
@@ -47,7 +49,26 @@ type StatusAction = {
 type DriverAvailability = {
   available: boolean;
   availableDrivers: number;
+  onlineDrivers: number;
+  busyDrivers: number;
+  pendingOfferDrivers: number;
 };
+
+function formatDriverAvailability(availability: DriverAvailability) {
+  if (availability.available) {
+    return `${availability.availableDrivers} driver${availability.availableDrivers === 1 ? "" : "s"} available`;
+  }
+  if (availability.pendingOfferDrivers > 0) {
+    return `${availability.pendingOfferDrivers} driver${availability.pendingOfferDrivers === 1 ? " is" : "s are"} reviewing a pickup request`;
+  }
+  if (availability.busyDrivers > 0) {
+    return `${availability.busyDrivers} online driver${availability.busyDrivers === 1 ? " is" : "s are"} on an active delivery`;
+  }
+  if (availability.onlineDrivers > 0) {
+    return `${availability.onlineDrivers} driver${availability.onlineDrivers === 1 ? " is" : "s are"} online but temporarily unavailable`;
+  }
+  return "No active driver is online — ready orders will queue automatically";
+}
 
 function formatPrice(price: string) {
   const value = Number.parseFloat(price);
@@ -88,7 +109,7 @@ function getOwnerActions(status: OrderStatusType): StatusAction[] {
     case OrderStatus.CONFIRMED:
       return [
         {
-          label: "Start preparing",
+          label: "Accept & start preparing",
           status: OrderStatus.PREPARING,
           tone: "primary",
         },
@@ -96,7 +117,11 @@ function getOwnerActions(status: OrderStatusType): StatusAction[] {
       ];
     case OrderStatus.PREPARING:
       return [
-        { label: "Mark ready", status: OrderStatus.READY, tone: "primary" },
+        {
+          label: "Mark ready for pickup",
+          status: OrderStatus.READY,
+          tone: "primary",
+        },
         { label: "Cancel", status: OrderStatus.CANCELLED, tone: "danger" },
       ];
     default:
@@ -167,8 +192,13 @@ export default function OwnerHomeScreen() {
     refetchInterval: 15000,
   });
 
-  const { data: driverAvailability, isLoading: availabilityLoading } =
-    useQuery<DriverAvailability>({
+  const {
+    data: driverAvailability,
+    error: availabilityError,
+    isError: availabilityIsError,
+    isLoading: availabilityLoading,
+    refetch: refetchAvailability,
+  } = useQuery<DriverAvailability>({
       queryKey: ["driver-availability"],
       queryFn: () =>
         api.get("/orders/driver-availability").then((res) => res.data),
@@ -343,18 +373,31 @@ export default function OwnerHomeScreen() {
             <View
               style={[
                 styles.driverAvailability,
-                driverAvailability?.available
+                availabilityIsError
+                  ? styles.driverAvailabilityError
+                  : driverAvailability?.available
                   ? styles.driverAvailable
                   : styles.driverUnavailable,
               ]}
             >
-              <Text style={styles.driverAvailabilityText}>
-                {availabilityLoading
-                  ? "Checking delivery drivers…"
-                  : driverAvailability?.available
-                    ? `${driverAvailability.availableDrivers} driver${driverAvailability.availableDrivers === 1 ? "" : "s"} available`
-                    : "No delivery drivers available — keep orders preparing"}
-              </Text>
+              {availabilityIsError ? (
+                <Pressable onPress={() => void refetchAvailability()}>
+                  <Text style={styles.driverAvailabilityErrorText}>
+                    Couldn’t check driver availability. Tap to retry.
+                  </Text>
+                  <Text style={styles.driverAvailabilityErrorHint} numberOfLines={1}>
+                    {getApiErrorMessage(availabilityError)}
+                  </Text>
+                </Pressable>
+              ) : (
+                <Text style={styles.driverAvailabilityText}>
+                  {availabilityLoading
+                    ? "Checking delivery drivers…"
+                    : driverAvailability
+                      ? formatDriverAvailability(driverAvailability)
+                      : "Checking delivery drivers…"}
+                </Text>
+              )}
             </View>
             {driverHeadingToPickup &&
             restaurantCoordinates &&
@@ -426,11 +469,6 @@ export default function OwnerHomeScreen() {
               {actions.length > 0 ? (
                 <View style={styles.actionsRow}>
                   {actions.map((action) => {
-                      const requiresDriver = action.status === OrderStatus.READY;
-                      const unavailable =
-                        requiresDriver &&
-                        (availabilityLoading || !driverAvailability?.available);
-
                       return (
                         <Pressable
                           key={action.status}
@@ -439,10 +477,10 @@ export default function OwnerHomeScreen() {
                             action.tone === "primary"
                               ? styles.actionPrimary
                               : styles.actionDanger,
-                            (isUpdating || unavailable) && styles.buttonDisabled,
+                            isUpdating && styles.buttonDisabled,
                           ]}
                           onPress={() => handleStatusAction(item.id, action)}
-                          disabled={isUpdating || unavailable}
+                          disabled={isUpdating}
                         >
                           {isUpdating ? (
                             <ActivityIndicator
@@ -468,7 +506,11 @@ export default function OwnerHomeScreen() {
               ) : (
                 <Text style={styles.noActionText}>
                   {item.status === OrderStatus.READY
-                    ? "Waiting for driver pickup"
+                    ? item.driverAcceptedAt
+                      ? "Rider accepted — heading to pickup"
+                      : item.driverId
+                        ? "Pickup request sent to a rider"
+                        : "Waiting for an available rider"
                     : item.status === OrderStatus.PENDING
                       ? "Waiting for customer payment"
                       : "No action needed"}
@@ -709,10 +751,23 @@ const styles = StyleSheet.create({
   driverUnavailable: {
     backgroundColor: "#FEF3C7",
   },
+  driverAvailabilityError: {
+    backgroundColor: "#FEE2E2",
+  },
   driverAvailabilityText: {
     color: "#444",
     fontSize: 13,
     fontWeight: "600",
+  },
+  driverAvailabilityErrorText: {
+    color: "#B42318",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  driverAvailabilityErrorHint: {
+    color: "#7A271A",
+    fontSize: 11,
+    marginTop: 3,
   },
   driverMapCard: {
     backgroundColor: "#FFFFFF",
