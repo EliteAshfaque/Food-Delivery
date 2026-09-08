@@ -5,6 +5,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { Platform } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/axios';
 import { getApiUrl } from '@/lib/api-config';
@@ -47,9 +48,10 @@ function loadNotifications() {
   return notificationsModule;
 }
 
-/** Registers an Expo push token (routed to FCM/APNs) and handles order taps. */
+/** Registers a device push token and handles order notification taps. */
 export function OrderTrackingNotifications() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const userId = user?.id;
   const userRole = user?.role;
 
@@ -83,6 +85,20 @@ export function OrderTrackingNotifications() {
           }
         });
 
+      // A foreground notification has already been written to
+      // notification_deliveries by the API. Refresh the in-app inbox so the
+      // user sees the same update immediately without needing to pull-to-
+      // refresh or leave/reopen the screen.
+      const receivedSubscription =
+        notificationApi.addNotificationReceivedListener(() => {
+          void queryClient.invalidateQueries({
+            // Customer/driver/owner inboxes use `mine`; the admin mobile
+            // screen uses the operations delivery log. Invalidate the shared
+            // prefix so either view refreshes after a foreground push.
+            queryKey: ['notifications'],
+          });
+        });
+
       // Expo emits a native-token change when FCM/APNs rolls a device token.
       // Fetching a new Expo token here keeps the server's token valid for the
       // signed-in user rather than continuing to send to a stale token.
@@ -96,6 +112,7 @@ export function OrderTrackingNotifications() {
 
       removeListeners = () => {
         responseSubscription.remove();
+        receivedSubscription.remove();
         tokenSubscription.remove();
       };
       void registerForOrderNotifications(notificationApi, () => isCurrent);
@@ -105,7 +122,7 @@ export function OrderTrackingNotifications() {
       isCurrent = false;
       removeListeners?.();
     };
-  }, [userId, userRole]);
+  }, [queryClient, userId, userRole]);
 
   return null;
 }
@@ -117,6 +134,19 @@ function getEasProjectId() {
   return typeof projectId === 'string' && projectId.trim()
     ? projectId.trim()
     : null;
+}
+
+/**
+ * Android can use Firebase Cloud Messaging directly when an Expo/EAS project
+ * has not been configured yet. This is also useful for teams that manage FCM
+ * credentials in their own API rather than through Expo's push service.
+ *
+ * The setting is deliberately opt-in when EAS is available. Without an EAS
+ * project ID, Android falls back to FCM so a valid native token is never only
+ * printed to Metro and then discarded.
+ */
+function prefersDirectFcm() {
+  return process.env.EXPO_PUBLIC_ANDROID_PUSH_PROVIDER?.trim().toLowerCase() === 'fcm';
 }
 
 function describeRegistrationError(error: unknown) {
@@ -153,22 +183,18 @@ async function registerForOrderNotifications(
       return;
     }
 
-    const projectId = getEasProjectId();
-    if (!projectId) {
-      console.warn(
-        '[notifications] Push registration is not configured: missing EAS project ID. Set EXPO_PUBLIC_EAS_PROJECT_ID to the Expo/EAS project UUID (not the Firebase project ID), restart Metro, then reload the Wasil development build.',
-      );
-      return;
-    }
-
     // Android 13+ needs a channel before the system permission/token flow.
     if (Platform.OS === 'android') {
-      await notificationApi.setNotificationChannelAsync('active-order-tracking', {
+      // New channel ID intentionally avoids an Android limitation: once a
+      // user/device has created the old quiet channel, an app cannot elevate
+      // it programmatically. This channel makes active-order status visible
+      // in the status bar and lock screen on Android 13+.
+      await notificationApi.setNotificationChannelAsync('active-order-tracking-v2', {
         name: 'Active order tracking',
-        importance: notificationApi.AndroidImportance.DEFAULT,
+        importance: notificationApi.AndroidImportance.HIGH,
         lockscreenVisibility: notificationApi.AndroidNotificationVisibility.PUBLIC,
-        sound: null,
-        vibrationPattern: [0],
+        sound: 'default',
+        vibrationPattern: [0, 160],
       });
     }
 
@@ -181,6 +207,65 @@ async function registerForOrderNotifications(
         permission.canAskAgain
           ? '[notifications] Notification permission was not granted. Approve the system prompt to receive order updates.'
           : '[notifications] Notifications are disabled for Wasil. Enable them in the device Settings, then reopen the app.',
+      );
+      return;
+    }
+
+    const projectId = getEasProjectId();
+    const useDirectFcm =
+      Platform.OS === 'android' && (prefersDirectFcm() || !projectId);
+
+    // Expo Push and Firebase Console use different tokens. Fetch the native
+    // Android token for a direct-FCM delivery route, and print it only in a
+    // development build so it can be tested through Firebase Console.
+    if (Platform.OS === 'android' && (useDirectFcm || __DEV__)) {
+      try {
+        const deviceToken = await notificationApi.getDevicePushTokenAsync();
+        const fcmToken =
+          deviceToken.type === 'android' && typeof deviceToken.data === 'string'
+            ? deviceToken.data.trim()
+            : '';
+        if (!fcmToken) {
+          throw new Error('Android did not return an FCM registration token');
+        }
+
+        if (__DEV__) {
+          console.log(
+            '[notifications] FCM registration token (Firebase Console test):',
+            fcmToken,
+          );
+        }
+
+        if (useDirectFcm) {
+          if (!isCurrent()) return;
+          // `fcm:` tells the API to use its direct Firebase HTTP v1 provider.
+          // The API stores it as `android:fcm:<token>`; an Expo token remains
+          // unmodified and continues through the Expo provider below.
+          await api.post('/auth/push-token', {
+            token: `fcm:${fcmToken}`,
+            platform: 'android',
+          });
+          if (__DEV__) {
+            console.log(
+              '[notifications] Direct FCM token saved for the signed-in user.',
+            );
+          }
+          return;
+        }
+      } catch (error) {
+        console.warn(
+          '[notifications] Could not obtain or save the Android FCM registration token:',
+          describeRegistrationError(error),
+        );
+        // If Expo is configured, keep going: it may still obtain and save an
+        // Expo token even if the optional development-token log failed.
+        if (useDirectFcm) return;
+      }
+    }
+
+    if (!projectId) {
+      console.warn(
+        '[notifications] Push registration is not configured for iOS: set EXPO_PUBLIC_EAS_PROJECT_ID for Expo/APNs delivery, then restart Metro and reload the app.',
       );
       return;
     }

@@ -8,12 +8,23 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  sql,
+} from 'drizzle-orm';
 import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
 import { AccountStatus, OrderStatus, UserRole } from '@food-delivery/types';
 import { schema } from '../db/relations';
 import * as tables from '../db/schema';
 import { OrdersGateway } from '../gateway/orders.gateway';
+import { FcmPushProviderError, FcmPushService } from './fcm-push.service';
 import {
   AddSupportNoteDto,
   CreateCancellationReasonDto,
@@ -35,6 +46,7 @@ const pushRetryMaxDelayMs = 15 * 60_000;
 const pushRetryMaxAttempts = 5;
 const pushRetryBatchSize = 50;
 const pushRequestTimeoutMs = 10_000;
+const pushTokenRecoveryWindowMs = 60 * 60_000;
 
 type ExpoPushTicket = {
   status?: 'ok' | 'error';
@@ -46,6 +58,14 @@ type ExpoPushTicket = {
 type ExpoPushResponse = {
   data?: ExpoPushTicket | ExpoPushTicket[];
   errors?: Array<{ code?: string; message?: string }>;
+};
+
+type PushProvider = 'EXPO' | 'FCM';
+
+type ParsedPushToken = {
+  token: string;
+  platform: 'android' | 'ios';
+  provider: PushProvider;
 };
 
 class PushDeliveryError extends Error {
@@ -68,6 +88,7 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject('DB') private readonly db: NeonDatabase<typeof schema>,
     private readonly ordersGateway: OrdersGateway,
+    private readonly fcmPush: FcmPushService,
   ) {}
 
   onModuleInit() {
@@ -484,10 +505,22 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
 
   async sendNotification(dto: SendNotificationDto) {
     const [recipient] = await this.db
-      .select({ id: tables.user.id, pushToken: tables.user.pushToken })
+      .select({
+        id: tables.user.id,
+        accountStatus: tables.user.accountStatus,
+        pushToken: tables.user.pushToken,
+      })
       .from(tables.user)
       .where(eq(tables.user.id, dto.recipientId));
     if (!recipient) throw new NotFoundException('Recipient not found');
+    if (recipient.accountStatus !== AccountStatus.ACTIVE) {
+      throw new BadRequestException(
+        'Notifications can only be sent to active accounts',
+      );
+    }
+    const provider = recipient.pushToken
+      ? this.getStoredPushProvider(recipient.pushToken)
+      : 'EXPO';
     const [delivery] = await this.db
       .insert(tables.notificationDeliveries)
       .values({
@@ -496,6 +529,7 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
         title: dto.title.trim(),
         body: dto.body.trim(),
         payload: dto.payload ?? {},
+        provider,
         status: recipient.pushToken ? 'QUEUED' : 'FAILED',
         attempts: recipient.pushToken ? 0 : 1,
         lastError: recipient.pushToken ? null : 'No registered push token',
@@ -513,13 +547,14 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
     orderId: string,
     title: string,
     body: string,
+    payload: Record<string, unknown> = {},
   ) {
     return this.sendNotification({
       recipientId,
       orderId,
       title,
       body,
-      payload: { orderId, type: 'ORDER_UPDATE' },
+      payload: { orderId, type: 'ORDER_UPDATE', ...payload },
     });
   }
 
@@ -561,6 +596,9 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
       order.id,
       message.title,
       message.body,
+      // Android uses this to replace one persistent, lock-screen-visible
+      // order card as the lifecycle advances instead of stacking six alerts.
+      { orderStatus: order.status, trackingNotification: true },
     );
   }
 
@@ -801,8 +839,20 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
         throw new PushDeliveryError('No registered push token', false);
       }
 
-      const { token, platform } = this.parseStoredPushToken(storedToken);
-      const ticket = await this.sendExpoPush(claimed, token, platform);
+      const parsedToken = this.parseStoredPushToken(storedToken);
+      const ticket =
+        parsedToken.provider === 'FCM'
+          ? await this.fcmPush.send({
+              token: parsedToken.token,
+              title: claimed.title,
+              body: claimed.body,
+              payload: claimed.payload,
+            })
+          : await this.sendExpoPush(
+              claimed,
+              parsedToken.token,
+              parsedToken.platform,
+            );
 
       await this.db
         .update(tables.notificationDeliveries)
@@ -811,6 +861,7 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
           // required before it can be considered device-delivered.
           status: 'SENT',
           attempts: claimed.attempts + 1,
+          provider: parsedToken.provider,
           providerMessageId: ticket.id ?? null,
           sentAt: new Date(),
           updatedAt: new Date(),
@@ -836,6 +887,8 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async retryPendingPushDeliveries() {
+    await this.recoverRecentDeliveriesWithNewPushToken();
+
     const pending = await this.db
       .select({
         id: tables.notificationDeliveries.id,
@@ -857,6 +910,84 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
       }
       if (!this.isPushRetryDue(delivery)) continue;
       await this.deliverPush(delivery.id);
+    }
+  }
+
+  /**
+   * A user can sign in and grant notification permission after an order event
+   * already created a failed delivery row. Recover only the latest update for
+   * an active order in the last hour. This repairs the current journey without
+   * replaying a stale timeline or an admin announcement as a push barrage.
+   */
+  private async recoverRecentDeliveriesWithNewPushToken() {
+    const cutoff = new Date(Date.now() - pushTokenRecoveryWindowMs);
+    const candidates = await this.db
+      .select({
+        id: tables.notificationDeliveries.id,
+        recipientId: tables.notificationDeliveries.recipientId,
+        orderId: tables.notificationDeliveries.orderId,
+      })
+      .from(tables.notificationDeliveries)
+      .innerJoin(
+        tables.user,
+        eq(tables.notificationDeliveries.recipientId, tables.user.id),
+      )
+      .innerJoin(
+        tables.orders,
+        eq(tables.notificationDeliveries.orderId, tables.orders.id),
+      )
+      .where(
+        and(
+          eq(tables.notificationDeliveries.status, 'FAILED'),
+          eq(
+            tables.notificationDeliveries.lastError,
+            'No registered push token',
+          ),
+          gte(tables.notificationDeliveries.createdAt, cutoff),
+          sql`${tables.user.pushToken} is not null`,
+          inArray(tables.orders.status, [
+            OrderStatus.CONFIRMED,
+            OrderStatus.PREPARING,
+            OrderStatus.READY,
+            OrderStatus.PICKED_UP,
+          ]),
+        ),
+      )
+      .orderBy(desc(tables.notificationDeliveries.createdAt))
+      .limit(pushRetryBatchSize * 4);
+
+    // Candidates are newest-first. Keep one current update per order and
+    // recipient, so an app that was opened late receives the current state
+    // rather than every missed state transition.
+    const seen = new Set<string>();
+    const recoverable = candidates.filter((delivery) => {
+      if (!delivery.recipientId || !delivery.orderId) return false;
+      const key = `${delivery.recipientId}:${delivery.orderId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    for (const delivery of recoverable.slice(0, pushRetryBatchSize)) {
+      await this.db
+        .update(tables.notificationDeliveries)
+        .set({
+          status: 'QUEUED',
+          attempts: 0,
+          lastError: null,
+          providerMessageId: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(tables.notificationDeliveries.id, delivery.id),
+            eq(tables.notificationDeliveries.status, 'FAILED'),
+            eq(
+              tables.notificationDeliveries.lastError,
+              'No registered push token',
+            ),
+          ),
+        );
     }
   }
 
@@ -920,10 +1051,19 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
     return recipient?.pushToken ?? null;
   }
 
-  private parseStoredPushToken(storedToken: string): {
-    token: string;
-    platform: 'android' | 'ios';
-  } {
+  private getStoredPushProvider(storedToken: string): PushProvider {
+    return storedToken.startsWith('android:fcm:') ? 'FCM' : 'EXPO';
+  }
+
+  private parseStoredPushToken(storedToken: string): ParsedPushToken {
+    if (storedToken.startsWith('android:fcm:')) {
+      const token = storedToken.slice('android:fcm:'.length).trim();
+      if (!token) {
+        throw new PushDeliveryError('Registered FCM token is empty', false);
+      }
+      return { token, platform: 'android', provider: 'FCM' };
+    }
+
     const platform = storedToken.startsWith('ios:') ? 'ios' : 'android';
     const token = storedToken.replace(/^(android|ios):/, '');
     if (
@@ -935,7 +1075,7 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
         false,
       );
     }
-    return { token, platform };
+    return { token, platform, provider: 'EXPO' };
   }
 
   private async sendExpoPush(
@@ -1026,6 +1166,13 @@ export class OperationsService implements OnModuleInit, OnModuleDestroy {
 
   private toPushDeliveryError(error: unknown) {
     if (error instanceof PushDeliveryError) return error;
+    if (error instanceof FcmPushProviderError) {
+      return new PushDeliveryError(
+        error.message,
+        error.retryable,
+        error.unregisterDevice,
+      );
+    }
     const message =
       error instanceof Error
         ? error.message.slice(0, 500)

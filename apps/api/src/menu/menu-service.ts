@@ -15,9 +15,14 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 import { CreateMenuItemDto } from './dto/create-menu.dto';
 import { UpdateMenuItemDto } from './dto/update-menu.dto';
 import { isPostgresUniqueViolation } from '../db/is-unique-violation';
+import { CacheKey } from '../cache/cache-key';
+import { CacheService } from '../cache/cache.service';
 @Injectable()
 export class MenuService {
-  constructor(@Inject('DB') private db: NeonDatabase<typeof RelationsSchema>) {}
+  constructor(
+    @Inject('DB') private db: NeonDatabase<typeof RelationsSchema>,
+    private readonly cache: CacheService,
+  ) {}
   private async getRestaurantByOwner(ownerId: string) {
     const [restaurant] = await this.db
       .select()
@@ -61,14 +66,21 @@ export class MenuService {
       throw error;
     }
 
+    await this.cache.invalidateRestaurant(restaurant.id);
     return category;
   }
 
   async getCategories(restaurantId: string) {
-    return this.db
+    const key = CacheKey.restaurantCategories(restaurantId);
+    const cached =
+      await this.cache.get<(typeof schema.menuCategories.$inferSelect)[]>(key);
+    if (cached) return cached;
+    const categories = await this.db
       .select()
       .from(schema.menuCategories)
       .where(eq(schema.menuCategories.restaurantId, restaurantId));
+    await this.cache.set(key, categories, 60);
+    return categories;
   }
 
   async updateCategory(id: string, ownerId: string, dto: UpdateCategoryDto) {
@@ -112,6 +124,7 @@ export class MenuService {
       .where(eq(schema.menuCategories.id, id))
       .returning();
 
+    await this.cache.invalidateRestaurant(restaurant.id);
     return updated;
   }
 
@@ -147,6 +160,7 @@ export class MenuService {
       .delete(schema.menuCategories)
       .where(eq(schema.menuCategories.id, id));
 
+    await this.cache.invalidateRestaurant(restaurant.id);
     return { message: 'Category deleted successfully' };
   }
 
@@ -170,15 +184,22 @@ export class MenuService {
       })
       .returning();
 
+    await this.cache.invalidateRestaurant(restaurant.id);
     return item;
   }
 
   async getItemsByRestaurant(restaurantId: string) {
     // returns all items for a restaurant – frontend groups them by category
-    return this.db
+    const key = CacheKey.restaurantMenu(restaurantId);
+    const cached =
+      await this.cache.get<(typeof schema.menuItems.$inferSelect)[]>(key);
+    if (cached) return cached;
+    const items = await this.db
       .select()
       .from(schema.menuItems)
       .where(eq(schema.menuItems.restaurantId, restaurantId));
+    await this.cache.set(key, items, 60);
+    return items;
   }
 
   async updateItem(id: string, ownerId: string, dto: UpdateMenuItemDto) {
@@ -221,6 +242,7 @@ export class MenuService {
       .where(eq(schema.menuItems.id, id))
       .returning();
 
+    await this.cache.invalidateRestaurant(restaurant.id);
     return updated;
   }
 
@@ -254,6 +276,7 @@ export class MenuService {
 
     await this.db.delete(schema.menuItems).where(eq(schema.menuItems.id, id));
 
+    await this.cache.invalidateRestaurant(restaurant.id);
     return { message: 'Item deleted' };
   }
 

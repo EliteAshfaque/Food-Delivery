@@ -15,6 +15,8 @@ type AppNotification = {
   title: string;
   body: string;
   status: string;
+  attempts?: number;
+  lastError?: string | null;
   readAt: string | null;
   createdAt: string;
 };
@@ -32,9 +34,16 @@ function relativeTime(value: string) {
 
 export function NotificationInbox({ role }: { role: InboxRole }) {
   const queryClient = useQueryClient();
+  // Admins need the operational delivery log, rather than only messages sent
+  // to the administrator account. Customer and driver inboxes remain private
+  // to the signed-in recipient.
+  const isDeliveryLog = role === 'ADMIN';
+  const endpoint = isDeliveryLog
+    ? '/admin/operations/notifications'
+    : '/notifications/mine';
   const notifications = useQuery<AppNotification[]>({
-    queryKey: ['notifications', 'mine'],
-    queryFn: () => api.get('/notifications/mine').then((res) => res.data),
+    queryKey: ['notifications', isDeliveryLog ? 'delivery-log' : 'mine'],
+    queryFn: () => api.get(endpoint).then((res) => res.data),
     refetchInterval: 30_000,
   });
   const markRead = useMutation({
@@ -49,9 +58,10 @@ export function NotificationInbox({ role }: { role: InboxRole }) {
 
   const items = notifications.data ?? [];
   const unread = items.filter((item) => !item.readAt).length;
+  const failed = items.filter((item) => item.status === 'FAILED').length;
 
   function open(item: AppNotification) {
-    if (!item.readAt) markRead.mutate(item.id);
+    if (!isDeliveryLog && !item.readAt) markRead.mutate(item.id);
     if (role === 'CUSTOMER' && item.orderId) {
       router.push(`/(customer)/(index)/oder/${item.orderId}` as never);
     } else if (role === 'DRIVER') {
@@ -69,14 +79,26 @@ export function NotificationInbox({ role }: { role: InboxRole }) {
         showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View>
-            <Text style={styles.eyebrow}>UPDATES</Text>
-            <Text style={styles.title}>Notifications</Text>
-            <Text style={styles.subtitle}>{unread ? `${unread} unread update${unread === 1 ? '' : 's'}` : 'You are all caught up'}</Text>
+            <Text style={styles.eyebrow}>{isDeliveryLog ? 'DELIVERY HEALTH' : 'UPDATES'}</Text>
+            <Text style={styles.title}>{isDeliveryLog ? 'Delivery log' : 'Notifications'}</Text>
+            <Text style={styles.subtitle}>
+              {isDeliveryLog
+                ? failed
+                  ? failed === 1
+                    ? '1 delivery needs attention'
+                    : `${failed} deliveries need attention`
+                  : items.length
+                    ? 'All recorded deliveries are healthy'
+                    : 'No push activity yet'
+                : unread
+                  ? `${unread} unread update${unread === 1 ? '' : 's'}`
+                  : 'You are all caught up'}
+            </Text>
           </View>
           <View style={styles.headerIcon}><AppIcon color={brand.colors.light.primary} name="notifications" size="md" /></View>
         </View>
-        {unread ? <Pressable accessibilityRole="button" disabled={markAllRead.isPending} onPress={() => markAllRead.mutate()} style={styles.readAll}><Text style={styles.readAllText}>{markAllRead.isPending ? 'Updating…' : 'Mark all as read'}</Text></Pressable> : null}
-        {notifications.isError ? <RequestErrorState error={notifications.error} onRetry={() => void notifications.refetch()} title="Could not load notifications" /> : items.length === 0 ? <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon color={brand.colors.light.mint} name="notifications" size="lg" /></View><Text style={styles.emptyTitle}>No updates yet</Text><Text style={styles.emptyCopy}>Order, delivery, and account updates will appear here.</Text></View> : <View style={styles.list}>{items.map((item) => <Pressable accessibilityRole="button" key={item.id} onPress={() => open(item)} style={({ pressed }) => [styles.row, !item.readAt && styles.rowUnread, pressed && styles.pressed]}><View style={[styles.rowIcon, !item.readAt && styles.rowIconUnread]}><AppIcon color={!item.readAt ? brand.colors.light.primary : brand.colors.light.inkMuted} name={item.status === 'FAILED' ? 'warning' : 'notifications'} size="sm" /></View><View style={styles.rowCopy}><View style={styles.rowTop}><Text numberOfLines={1} style={styles.rowTitle}>{item.title}</Text><Text style={styles.time}>{relativeTime(item.createdAt)}</Text></View><Text numberOfLines={2} style={styles.rowBody}>{item.body}</Text></View>{!item.readAt ? <View style={styles.unreadDot} /> : null}</Pressable>)}</View>}
+        {!isDeliveryLog && unread ? <Pressable accessibilityRole="button" disabled={markAllRead.isPending} onPress={() => markAllRead.mutate()} style={styles.readAll}><Text style={styles.readAllText}>{markAllRead.isPending ? 'Updating…' : 'Mark all as read'}</Text></Pressable> : null}
+        {notifications.isError ? <RequestErrorState error={notifications.error} onRetry={() => void notifications.refetch()} title={isDeliveryLog ? "Could not load the delivery log" : "Could not load notifications"} /> : items.length === 0 ? <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon color={brand.colors.light.mint} name="notifications" size="lg" /></View><Text style={styles.emptyTitle}>{isDeliveryLog ? 'No delivery activity yet' : 'No updates yet'}</Text><Text style={styles.emptyCopy}>{isDeliveryLog ? 'Order and admin push attempts will appear here.' : 'Order, delivery, and account updates will appear here.'}</Text></View> : <View style={styles.list}>{items.map((item) => <Pressable accessibilityRole="button" key={item.id} onPress={() => open(item)} style={({ pressed }) => [styles.row, !isDeliveryLog && !item.readAt && styles.rowUnread, pressed && styles.pressed]}><View style={[styles.rowIcon, !isDeliveryLog && !item.readAt && styles.rowIconUnread]}><AppIcon color={!isDeliveryLog && !item.readAt ? brand.colors.light.primary : brand.colors.light.inkMuted} name={item.status === 'FAILED' ? 'warning' : 'notifications'} size="sm" /></View><View style={styles.rowCopy}><View style={styles.rowTop}><Text numberOfLines={1} style={styles.rowTitle}>{item.title}</Text><Text style={styles.time}>{relativeTime(item.createdAt)}</Text></View><Text numberOfLines={2} style={styles.rowBody}>{item.body}</Text>{isDeliveryLog && item.lastError ? <Text numberOfLines={1} style={styles.deliveryError}>{item.lastError}</Text> : null}</View>{!isDeliveryLog && !item.readAt ? <View style={styles.unreadDot} /> : null}</Pressable>)}</View>}
       </ScrollView>
     </View>
   );
@@ -102,6 +124,7 @@ const styles = StyleSheet.create({
   rowTitle: { color: brand.colors.light.ink, flex: 1, fontSize: 14, fontWeight: '800' },
   time: { color: brand.colors.light.inkMuted, fontSize: 10 },
   rowBody: { color: brand.colors.light.inkMuted, fontSize: 12, lineHeight: 17, marginTop: 3 },
+  deliveryError: { color: '#B54732', fontSize: 11, fontWeight: '700', marginTop: 4 },
   unreadDot: { backgroundColor: brand.colors.light.primary, borderRadius: 4, height: 8, marginTop: 5, width: 8 },
   empty: { alignItems: 'center', backgroundColor: brand.colors.light.surface, borderColor: brand.colors.light.border, borderRadius: brand.radius.large, borderWidth: 1, marginTop: 30, padding: 30 },
   emptyIcon: { alignItems: 'center', backgroundColor: '#E9F8F1', borderRadius: 24, height: 58, justifyContent: 'center', width: 58 },

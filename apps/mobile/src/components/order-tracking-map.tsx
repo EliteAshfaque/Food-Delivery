@@ -1,6 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
+import MapView, {
+  Marker,
+  PROVIDER_GOOGLE,
+  type MapMarker,
+  type Region,
+} from 'react-native-maps';
 
 import { brand } from '@/constants/brand';
 import type { Coordinates } from '@/hooks/user-order.socket';
@@ -44,10 +49,48 @@ export function OrderTrackingMap({
   destinationDescription = 'Drop-off location',
 }: OrderTrackingMapProps) {
   const mapRef = useRef<MapView>(null);
+  const driverMarkerRef = useRef<MapMarker>(null);
+  const lastDriverRef = useRef<Coordinates | null>(null);
+  const hasFittedLiveRoute = useRef(false);
+  // Keep the React prop on the first GPS point. On Android, changing this
+  // prop for every socket event teleports the marker before the native map has
+  // a chance to interpolate. Later points are sent straight to the native map.
+  const [driverMarkerCoordinate, setDriverMarkerCoordinate] =
+    useState<Coordinates | null>(driver ?? null);
 
   useEffect(() => {
-    const region = regionForPoints(delivery, driver);
-    mapRef.current?.animateToRegion(region, 450);
+    // Keep the map stable during tracking. Re-centering it every two seconds
+    // makes a real moving rider look like a jumping pin. We fit both points
+    // once when the first location arrives; the customer can then inspect the
+    // route while Android/iOS moves the marker between incoming GPS samples.
+    if (driver && !hasFittedLiveRoute.current) {
+      mapRef.current?.animateToRegion(regionForPoints(delivery, driver), 450);
+      hasFittedLiveRoute.current = true;
+    }
+    if (!driver) {
+      hasFittedLiveRoute.current = false;
+      lastDriverRef.current = null;
+      const frame = requestAnimationFrame(() => setDriverMarkerCoordinate(null));
+      return () => cancelAnimationFrame(frame);
+    }
+
+    if (!lastDriverRef.current) {
+      const frame = requestAnimationFrame(() => setDriverMarkerCoordinate(driver));
+      lastDriverRef.current = driver;
+      return () => cancelAnimationFrame(frame);
+    } else if (Platform.OS === 'android') {
+      // Native Google Maps interpolation is considerably smoother than a
+      // React re-render for a marker. A 1.8 s duration leaves a small buffer
+      // before the API's two-second GPS tick arrives.
+      driverMarkerRef.current?.animateMarkerToCoordinate(driver, 1_800);
+    } else {
+      // Apple Maps does not expose the Android marker command. Preserve a
+      // correct current position there while Android gets continuous motion.
+      const frame = requestAnimationFrame(() => setDriverMarkerCoordinate(driver));
+      lastDriverRef.current = driver;
+      return () => cancelAnimationFrame(frame);
+    }
+    lastDriverRef.current = driver;
   }, [delivery, driver]);
 
   return (
@@ -66,9 +109,10 @@ export function OrderTrackingMap({
           description={destinationDescription}
           pinColor={brand.colors.light.primary}
         />
-        {driver ? (
+        {driverMarkerCoordinate ? (
           <Marker
-            coordinate={driver}
+            coordinate={driverMarkerCoordinate}
+            ref={driverMarkerRef}
             title="Driver"
             description={live ? 'Live location' : 'Last known location'}
             pinColor={brand.colors.light.mint}

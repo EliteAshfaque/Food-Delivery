@@ -42,6 +42,12 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# Firebase/Admin credentials must never be committed. The API supports an
+# absolute file path outside this repository; these patterns protect against
+# accidentally downloading a service-account key into the API folder.
+firebase-service-account*.json
+*firebase-adminsdk*.json
+
 # temp directory
 .temp
 .tmp

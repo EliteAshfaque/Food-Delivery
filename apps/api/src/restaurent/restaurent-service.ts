@@ -18,10 +18,15 @@ import {
 } from '@food-delivery/types';
 import { CreateRestaurantDto } from './dto/create-restaurent.dto';
 import { UpdateRestaurantDto } from './dto/update-restaurent.dto';
+import { CacheKey } from '../cache/cache-key';
+import { CacheService } from '../cache/cache.service';
 
 @Injectable()
 export class RestaurantsService {
-  constructor(@Inject('DB') private db: NeonDatabase<typeof RelationsSchema>) {}
+  constructor(
+    @Inject('DB') private db: NeonDatabase<typeof RelationsSchema>,
+    private readonly cache: CacheService,
+  ) {}
 
   async create(ownerId: string, dto: CreateRestaurantDto) {
     this.assertLocationPair(dto.latitude, dto.longitude);
@@ -59,6 +64,7 @@ export class RestaurantsService {
       throw error;
     }
 
+    await this.cache.invalidateRestaurantCatalog();
     return restaurant;
   }
 
@@ -70,6 +76,10 @@ export class RestaurantsService {
     return restaurant ?? null;
   }
   async findById(id: string) {
+    const key = CacheKey.restaurant(id);
+    const cached =
+      await this.cache.get<typeof schema.restaurants.$inferSelect>(key);
+    if (cached) return cached;
     const [row] = await this.db
       .select({ restaurant: schema.restaurants })
       .from(schema.restaurants)
@@ -88,9 +98,15 @@ export class RestaurantsService {
     if (!row) {
       throw new NotFoundException('Restaurant not found');
     }
+    await this.cache.set(key, row.restaurant, 120);
     return row.restaurant;
   }
   async findAll(search?: string) {
+    const version = await this.cache.getRestaurantCatalogVersion();
+    const key = CacheKey.restaurantCatalog(version, search);
+    const cached =
+      await this.cache.get<(typeof schema.restaurants.$inferSelect)[]>(key);
+    if (cached) return cached;
     const term = search?.trim();
     const searchCondition = term
       ? or(
@@ -114,7 +130,9 @@ export class RestaurantsService {
           searchCondition,
         ),
       );
-    return rows.map((row) => row.restaurant);
+    const restaurants = rows.map((row) => row.restaurant);
+    await this.cache.set(key, restaurants, 30);
+    return restaurants;
   }
   async update(id: string, ownerId: string, dto: UpdateRestaurantDto) {
     if (Object.keys(dto).length === 0) {
@@ -152,6 +170,7 @@ export class RestaurantsService {
       .where(eq(schema.restaurants.id, id))
       .returning();
 
+    await this.cache.invalidateRestaurant(updated.id);
     return updated;
   }
 

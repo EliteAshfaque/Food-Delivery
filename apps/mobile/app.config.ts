@@ -84,6 +84,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       favicon: './assets/images/wasil-icon.png',
     },
     plugins: [
+      './plugins/with-order-tracking-android',
       'expo-router',
       [
         'expo-splash-screen',
@@ -122,7 +123,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         {
           icon: './assets/images/wasil-icon.png',
           color: '#F2552C',
-          defaultChannel: 'active-order-tracking',
+          defaultChannel: 'active-order-tracking-v2',
         },
       ],
     ],
@@ -133,7 +134,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         ...(config.extra?.eas ?? {}),
         projectId:
           process.env.EXPO_PUBLIC_EAS_PROJECT_ID ??
-          config.extra?.eas?.projectId,
+          config.extra?.eas?.projectId ??
+          '83b5bc2e-940e-4c9a-8736-ac6e158ee844',
       },
     },
     experiments: {

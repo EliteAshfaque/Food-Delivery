@@ -1,98 +1,85 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Wasil API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS API for authentication, restaurants, menus, checkout, Stripe, driver
+dispatch, live tracking, notifications, administration, and reports.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## Setup
 
 ```bash
-$ pnpm install
+cp apps/api/.env.example apps/api/.env
+pnpm install
+pnpm --dir apps/api db:push
 ```
 
-## Compile and run the project
+Set `DATABASE_URL`, `JWT_SECRET`, Upstash Redis credentials, and integration
+values (Stripe, UploadThing, Google) in `apps/api/.env` before running.
+
+## Commands
 
 ```bash
-# development
-$ pnpm run start
+# Start API at http://localhost:3000
+pnpm --dir apps/api dev
+pnpm --dir apps/api start
 
-# watch mode
-$ pnpm run start:dev
+# Build/production
+pnpm --dir apps/api build
+pnpm --dir apps/api start:prod
 
-# production mode
-$ pnpm run start:prod
+# Database
+pnpm --dir apps/api db:push
+pnpm --dir apps/api db:studio
+
+# Validation
+pnpm --dir apps/api lint
+pnpm --dir apps/api lint:fix
+pnpm --dir apps/api format
+pnpm --dir apps/api exec tsc --noEmit
+
+# Tests
+pnpm --dir apps/api test
+pnpm --dir apps/api test:watch
+pnpm --dir apps/api test:cov
+pnpm --dir apps/api test:e2e
 ```
 
-## Run tests
+API prefix: `http://localhost:3000/api`. Socket namespace:
+`ws://localhost:3000/orders`.
 
-```bash
-# unit tests
-$ pnpm run test
+## Cache
 
-# e2e tests
-$ pnpm run test:e2e
+Upstash supports both live driver GPS and cache-aside catalogue reads:
 
-# test coverage
-$ pnpm run test:cov
+- restaurant list/search: 30 seconds
+- restaurant detail: 120 seconds
+- menu and categories: 60 seconds
+
+Restaurant/menu/category/review/admin updates invalidate the affected keys;
+catalogue invalidation uses a versioned tag to cover all search variants. Redis
+failure falls back to PostgreSQL. Orders, payments, carts, dispatch, and GPS
+are never cached as catalogue data.
+
+## Android FCM
+
+For direct Android FCM, set only server-side values:
+
+```env
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_SERVICE_ACCOUNT_FILE=/absolute/path/to/service-account.json
 ```
 
-## Deployment
+Restart API after changing them. Keep the service-account JSON outside Git.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## First administrator
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+1. Register a normal account.
+2. Set `ADMIN_BOOTSTRAP_EMAIL` to that account email in API `.env`.
+3. Restart API once and sign in to the admin portal.
+4. Remove the variable and restart API again.
 
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
+There is intentionally no public admin-registration endpoint.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Production
 
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Use HTTPS, exact `CORS_ORIGINS`/`SOCKET_CORS_ORIGIN`, Stripe webhook
+verification at `/api/payments/webhook`, managed migrations, and deployment
+secret storage.

@@ -50,6 +50,7 @@ import { UpdateAdminOfferDto } from './dto/update-admin-offer.dto';
 import { UpdateAdminRestaurantDto } from './dto/update-admin-restaurant.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import { UpdateRestaurantModerationDto } from './dto/update-restaurant-moderation.dto';
+import { CacheService } from '../cache/cache.service';
 
 type Pagination = Pick<PaginationQueryDto, 'page' | 'pageSize'>;
 
@@ -61,6 +62,7 @@ export class AdminService {
     private readonly offersService: OffersService,
     private readonly driverService: DriverService,
     private readonly paymentsService: PaymentsService,
+    private readonly cache: CacheService,
   ) {}
 
   async getDashboard() {
@@ -183,6 +185,36 @@ export class AdminService {
     ]);
 
     return this.paginated(items, query, total);
+  }
+
+  /**
+   * Returns the same safe, admin-facing account summary as the user list.
+   * In particular, it deliberately exposes only push-token readiness and
+   * never the device token itself.
+   */
+  async getUser(id: string) {
+    const [user] = await this.db
+      .select({
+        id: tables.user.id,
+        firstName: tables.user.firstName,
+        lastName: tables.user.lastName,
+        email: tables.user.email,
+        role: tables.user.role,
+        accountStatus: tables.user.accountStatus,
+        accountStatusReason: tables.user.accountStatusReason,
+        accountStatusUpdatedAt: tables.user.accountStatusUpdatedAt,
+        isOnline: tables.user.isOnline,
+        // The operational picker needs readiness, never the confidential
+        // native/Expo push token itself.
+        hasPushToken: sql<boolean>`${tables.user.pushToken} is not null`,
+        createdAt: tables.user.createdAt,
+        updatedAt: tables.user.updatedAt,
+      })
+      .from(tables.user)
+      .where(eq(tables.user.id, id));
+
+    if (!user) throw new NotFoundException('User not found');
+    return user;
   }
 
   async createUser(actorId: string, dto: CreateAdminUserDto) {
@@ -323,6 +355,7 @@ export class AdminService {
       },
     );
 
+    await this.cache.invalidateRestaurantCatalog();
     return restaurant;
   }
 
@@ -377,6 +410,7 @@ export class AdminService {
       { fields: Object.keys(dto) },
     );
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return restaurant;
   }
 
@@ -431,6 +465,7 @@ export class AdminService {
       { restaurantId, name: category.name },
     );
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return category;
   }
 
@@ -482,6 +517,7 @@ export class AdminService {
       { restaurantId, from: category.name, to: updated.name },
     );
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return updated;
   }
 
@@ -518,6 +554,7 @@ export class AdminService {
       { restaurantId, name: category.name },
     );
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return { message: 'Category deleted successfully' };
   }
 
@@ -556,6 +593,7 @@ export class AdminService {
       name: item.name,
     });
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return item;
   }
 
@@ -613,6 +651,7 @@ export class AdminService {
       fields: Object.keys(dto),
     });
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return updated;
   }
 
@@ -646,6 +685,7 @@ export class AdminService {
       name: existing.name,
     });
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return { message: 'Item deleted' };
   }
 
@@ -1018,6 +1058,15 @@ export class AdminService {
       unassignedReadyOrderIds: unassignedOrderIds,
     });
 
+    // An owner suspension/demotion closes their public restaurant. Clear the
+    // exact cards and bump the catalogue generation so every cached search
+    // result stops exposing it immediately.
+    await Promise.all(
+      closedRestaurantIds.map((restaurantId) =>
+        this.cache.invalidateRestaurant(restaurantId),
+      ),
+    );
+
     if (changedStatus || changedRole) {
       await this.ordersGateway.disconnectUser(targetUserId);
     }
@@ -1166,6 +1215,7 @@ export class AdminService {
       },
     );
 
+    await this.cache.invalidateRestaurant(restaurantId);
     return updated;
   }
 

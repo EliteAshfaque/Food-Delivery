@@ -8,13 +8,14 @@ import {
   Text,
   View,
 } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useLocalSearchParams } from "expo-router";
 
 import { AppIcon } from "@/components/wasil-icon-system";
 import { RequestErrorState } from "@/components/request-error-state";
 import { WasilImage } from "@/components/wasil-image";
 import { brand } from "@/constants/brand";
+import { getApiErrorMessage } from "@/lib/api-error";
 import { api } from "@/lib/axios";
 import { formatCurrency } from "@/lib/format";
 import { useCartStore } from "@/store/cart-store";
@@ -33,6 +34,7 @@ function formatRating(rating: number | string) {
 
 export default function RestaurantDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
     null,
   );
@@ -61,6 +63,26 @@ export default function RestaurantDetailScreen() {
       queryFn: () => api.get(`/restaurants/${id}`).then((res) => res.data),
       enabled: Boolean(id),
     });
+
+  const favorites = useQuery<{ favorite: { restaurantId: string } }[]>({
+    queryKey: ["favorites"],
+    queryFn: () => api.get("/engagement/favorites").then((res) => res.data),
+  });
+  const isFavorite = Boolean(
+    id && favorites.data?.some((item) => item.favorite.restaurantId === id),
+  );
+  const favoriteMutation = useMutation({
+    mutationFn: () =>
+      isFavorite
+        ? api.delete(`/engagement/favorites/${id}`)
+        : api.post("/engagement/favorites", { restaurantId: id }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["favorites"] });
+    },
+    onError: (error) => {
+      Alert.alert("Could not update favorites", getApiErrorMessage(error));
+    },
+  });
 
   const {
     data: categories = [],
@@ -260,6 +282,27 @@ export default function RestaurantDetailScreen() {
               ]}
             >
               <AppIcon color={brand.colors.light.ink} name="back" size="md" />
+            </Pressable>
+            <Pressable
+              accessibilityLabel={
+                isFavorite ? "Remove from favorites" : "Add to favorites"
+              }
+              accessibilityRole="button"
+              accessibilityState={{ selected: isFavorite }}
+              disabled={!id || favoriteMutation.isPending}
+              hitSlop={6}
+              onPress={() => favoriteMutation.mutate()}
+              style={({ pressed }) => [
+                styles.favoriteButton,
+                isFavorite && styles.favoriteButtonActive,
+                pressed && styles.pressed,
+              ]}
+            >
+              <AppIcon
+                color={isFavorite ? "#FFFFFF" : brand.colors.light.primary}
+                name="favoriteRestaurant"
+                size="md"
+              />
             </Pressable>
             <View
               accessibilityLabel={`Rating ${formatRating(restaurant.rating)}`}
@@ -668,6 +711,17 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 16,
     top: 14,
+  },
+  favoriteButton: {
+    alignItems: "center",
+    backgroundColor: brand.colors.light.surface,
+    borderRadius: 18,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
+  },
+  favoriteButtonActive: {
+    backgroundColor: brand.colors.light.primary,
   },
   backButton: {
     alignItems: "center",

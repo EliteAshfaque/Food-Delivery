@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useMemo, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   CreateOfferDialog,
@@ -1011,66 +1011,107 @@ export function NotificationsPage({ request }: PageProps) {
   const [notice, setNotice] = useState<NoticeState>(null);
   const [sending, setSending] = useState(false);
   const [form, setForm] = useState({ recipientId: '', orderId: '', title: '', body: '' });
+  const [recipientSearchInput, setRecipientSearchInput] = useState('');
   const [recipientSearch, setRecipientSearch] = useState('');
+  const [recipientRole, setRecipientRole] = useState<UserRole | 'ALL'>('ALL');
+  const [recipientPage, setRecipientPage] = useState(1);
   const [recipientPickerOpen, setRecipientPickerOpen] = useState(false);
+  const [selectedRecipient, setSelectedRecipient] = useState<AdminUser | null>(null);
+  const [recipientIdInput, setRecipientIdInput] = useState('');
+  const [lookingUpRecipient, setLookingUpRecipient] = useState(false);
+  const [recipientLookupError, setRecipientLookupError] = useState<string | null>(null);
   const loader = useCallback(
     () => request<NotificationRow[]>('/admin/operations/notifications'),
     [request],
   );
+  const recipientsUrl = useMemo(
+    () => `/admin/users${queryString({
+      accountStatus: 'ACTIVE',
+      page: recipientPage,
+      pageSize: 8,
+      role: recipientRole === 'ALL' ? undefined : recipientRole,
+      search: recipientSearch || undefined,
+    })}`,
+    [recipientPage, recipientRole, recipientSearch],
+  );
   const recipientsLoader = useCallback(
-    () => request<Paginated<AdminUser>>('/admin/users?accountStatus=ACTIVE&pageSize=100'),
-    [request],
+    () => request<Paginated<AdminUser>>(recipientsUrl),
+    [request, recipientsUrl],
   );
   const deliveries = useRemote(loader, 20_000);
   const recipients = useRemote(recipientsLoader);
   const all = deliveries.data ?? [];
   const visible = filter === 'ALL' ? all : all.filter((item) => item.status === filter);
-  const sent = all.filter((item) => item.status === 'SENT').length;
-  const failed = all.filter((item) => item.status === 'FAILED').length;
-  const pending = all.filter((item) => ['QUEUED', 'RETRYING'].includes(item.status)).length;
-  const selectedRecipient = useMemo(
-    () => recipients.data?.items.find((user) => user.id === form.recipientId) ?? null,
-    [form.recipientId, recipients.data],
-  );
-  const matchingRecipients = useMemo(() => {
-    const query = recipientSearch.trim().toLocaleLowerCase();
-    const activeUsers = recipients.data?.items ?? [];
-    const matches = query
-      ? activeUsers.filter((user) =>
-        [fullName(user), user.email ?? '', humanize(user.role)]
-          .join(' ')
-          .toLocaleLowerCase()
-          .includes(query),
-      )
-      : activeUsers;
 
-    return [...matches]
-      .sort((left, right) => fullName(left).localeCompare(fullName(right)))
-      .slice(0, 8);
-  }, [recipientSearch, recipients.data]);
+  // Search is deliberately debounced: large customer lists stay responsive
+  // without firing a protected admin request for every keystroke.
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      const nextSearch = recipientSearchInput.trim();
+      setRecipientPage(1);
+      setRecipientSearch((current) => current === nextSearch ? current : nextSearch);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [recipientSearchInput]);
 
   const refresh = () => {
     deliveries.reload();
     recipients.reload();
   };
 
-  function selectRecipient(recipient: AdminUser) {
+  function chooseRecipient(recipient: AdminUser) {
+    setSelectedRecipient(recipient);
     setForm((value) => ({ ...value, recipientId: recipient.id }));
-    setRecipientSearch('');
+    setRecipientLookupError(null);
     setRecipientPickerOpen(false);
   }
 
   function clearRecipient() {
+    setSelectedRecipient(null);
     setForm((value) => ({ ...value, recipientId: '' }));
-    setRecipientSearch('');
     setRecipientPickerOpen(true);
+  }
+
+  function changeRecipientRole(nextRole: UserRole | 'ALL') {
+    setRecipientRole(nextRole);
+    setRecipientPage(1);
+  }
+
+  async function lookupRecipientById() {
+    const recipientId = recipientIdInput.trim();
+    if (!uuidPattern.test(recipientId)) {
+      setRecipientLookupError('Enter a complete user UUID to look up an account.');
+      return;
+    }
+
+    // A lookup explicitly changes the intended target. Clear any older
+    // selection first so an unsuccessful lookup cannot accidentally send to
+    // the previously selected person.
+    clearRecipient();
+    setRecipientPickerOpen(false);
+    setLookingUpRecipient(true);
+    setRecipientLookupError(null);
+    try {
+      const recipient = await request<AdminUser>(`/admin/users/${recipientId}`);
+      if (recipient.accountStatus !== 'ACTIVE') {
+        setRecipientLookupError(
+          `${fullName(recipient)} is ${humanize(recipient.accountStatus)}. Notifications can only be sent to active accounts.`,
+        );
+        return;
+      }
+      chooseRecipient(recipient);
+      setRecipientIdInput('');
+    } catch (error) {
+      setRecipientLookupError(getErrorMessage(error));
+    } finally {
+      setLookingUpRecipient(false);
+    }
   }
 
   async function compose(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!form.recipientId) {
+    if (!form.recipientId || !selectedRecipient) {
       setNotice({ type: 'error', message: 'Choose an active recipient before sending this notification.' });
-      setRecipientPickerOpen(true);
       return;
     }
     const orderId = form.orderId.trim();
@@ -1093,7 +1134,9 @@ export function NotificationsPage({ request }: PageProps) {
         },
       });
       setForm({ recipientId: '', orderId: '', title: '', body: '' });
-      setRecipientSearch('');
+      setSelectedRecipient(null);
+      setRecipientIdInput('');
+      setRecipientLookupError(null);
       setRecipientPickerOpen(false);
       if (delivery.status === 'FAILED') {
         setNotice({
@@ -1127,22 +1170,70 @@ export function NotificationsPage({ request }: PageProps) {
     <>
       <PageHeader
         actions={<RefreshButton busy={deliveries.refreshing || recipients.refreshing} onClick={refresh} />}
-        description="Select a real active person, send a clear update, and monitor every push delivery attempt from one dedicated workspace."
+        description="Choose one active person and send a clear update. Delivery history stays below when you need it."
         eyebrow="CUSTOMER COMMUNICATIONS"
-        title="Notification center"
+        title="Send notification"
       />
       <PageNotice clear={() => setNotice(null)} notice={notice} />
-      <section className="notification-hero">
-        <div><p className="eyebrow">DELIVERY HEALTH</p><h2>Keep every customer informed.</h2><p>Queued notifications are retried safely. A failed delivery retains the provider error for follow-up.</p></div>
-        <div className="notification-hero__stats"><span><strong>{sent}</strong> Delivered</span><span><strong>{pending}</strong> In progress</span><span><strong>{failed}</strong> Need attention</span></div>
-      </section>
-      <section className="notification-layout">
+      <section className="notification-compose-only">
         <form className="content-card notification-compose" onSubmit={compose}>
-          <div><p className="eyebrow">NEW MESSAGE</p><h2>Compose notification</h2><p>Choose an active account by name, email, or role. One person receives each message.</p></div>
+          <div><p className="eyebrow">NEW MESSAGE</p><h2>Message details</h2><p>Search for the recipient, write the update, then send.</p></div>
           <div className="field notification-recipient-field">
             <label htmlFor="notification-recipient-search">Send to <small>active account</small></label>
+            <div className="notification-recipient-picker" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setRecipientPickerOpen(false); }} onFocus={() => setRecipientPickerOpen(true)}>
+              <div className="notification-recipient-search-controls">
+                <input
+                  aria-controls="notification-recipient-results"
+                  aria-expanded={recipientPickerOpen}
+                  autoComplete="off"
+                  id="notification-recipient-search"
+                  maxLength={100}
+                  onChange={(event) => setRecipientSearchInput(event.target.value)}
+                  placeholder="Search name or email"
+                  type="search"
+                  value={recipientSearchInput}
+                />
+                <label className="sr-only" htmlFor="notification-recipient-role">Filter recipients by role</label>
+                <select id="notification-recipient-role" onChange={(event) => changeRecipientRole(event.target.value as UserRole | 'ALL')} value={recipientRole}>
+                  <option value="ALL">All roles</option>
+                  {roleOptions().map((role) => <option key={role} value={role}>{humanize(role)}</option>)}
+                </select>
+              </div>
+              {recipientPickerOpen ? <div aria-busy={recipients.loading || recipients.refreshing} className="notification-recipient-results" id="notification-recipient-results" role="listbox">
+                {recipients.loading ? <p>Loading active people…</p> : null}
+                {recipients.error && !recipients.data ? <div className="notification-recipient-results__error"><span>Could not load active people.</span><button className="text-button" onClick={recipients.reload} type="button">Retry</button></div> : null}
+                {!recipients.loading && recipients.data?.items.length === 0 ? <p>No active people match this search.</p> : null}
+                {recipients.data?.items.map((recipient) => (
+                  <button
+                    aria-pressed={selectedRecipient?.id === recipient.id}
+                    className={`notification-recipient-option ${selectedRecipient?.id === recipient.id ? 'notification-recipient-option--selected' : ''}`}
+                    key={recipient.id}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseRecipient(recipient)}
+                    role="option"
+                    type="button">
+                    <span className="avatar" aria-hidden="true">{recipient.firstName.charAt(0).toUpperCase() || '?'}</span>
+                    <span className="notification-recipient-option__copy"><strong>{fullName(recipient)}</strong><small>{recipient.email ?? 'No email on record'} · {humanize(recipient.role)}</small></span>
+                    <span className={`notification-recipient-token ${recipient.hasPushToken === true ? 'notification-recipient-token--ready' : recipient.hasPushToken === false ? 'notification-recipient-token--missing' : ''}`}>
+                      {recipient.hasPushToken === true ? 'Push ready' : recipient.hasPushToken === false ? 'No token' : '—'}
+                    </span>
+                  </button>
+                ))}
+                {recipients.data && recipients.data.pagination.totalPages > 1 ? (
+                  <div className="notification-recipient-pagination">
+                    <span>{recipients.data.pagination.total.toLocaleString()} match{recipients.data.pagination.total === 1 ? '' : 'es'}</span>
+                    <div>
+                      <button aria-label="Previous recipient results" className="text-button" disabled={recipientPage <= 1} onMouseDown={(event) => event.preventDefault()} onClick={() => setRecipientPage((page) => Math.max(1, page - 1))} type="button">Previous</button>
+                      <span>{recipientPage} / {recipients.data.pagination.totalPages}</span>
+                      <button aria-label="Next recipient results" className="text-button" disabled={recipientPage >= recipients.data.pagination.totalPages} onMouseDown={(event) => event.preventDefault()} onClick={() => setRecipientPage((page) => page + 1)} type="button">Next</button>
+                    </div>
+                  </div>
+                ) : null}
+              </div> : null}
+            </div>
+            <small className="notification-recipient-help" id="notification-recipient-help">Only active accounts are shown. Internal IDs stay hidden during normal selection.</small>
             {selectedRecipient ? (
-              <div className="notification-recipient-selected">
+              <div className="notification-recipient-selected" aria-live="polite">
                 <div className="notification-recipient-selected__identity">
                   <span className="avatar" aria-hidden="true">{selectedRecipient.firstName.charAt(0).toUpperCase() || '?'}</span>
                   <div>
@@ -1151,68 +1242,45 @@ export function NotificationsPage({ request }: PageProps) {
                   </div>
                 </div>
                 <div className="notification-recipient-selected__actions">
-                  <span className={`notification-recipient-token ${selectedRecipient.hasPushToken === true ? 'notification-recipient-token--ready' : 'notification-recipient-token--missing'}`}>
+                  <span className={`notification-recipient-token ${selectedRecipient.hasPushToken === true ? 'notification-recipient-token--ready' : selectedRecipient.hasPushToken === false ? 'notification-recipient-token--missing' : ''}`}>
                     {selectedRecipient.hasPushToken === true ? 'Push ready' : selectedRecipient.hasPushToken === false ? 'No push token' : 'Token unknown'}
                   </span>
-                  <button className="text-button" onClick={clearRecipient} type="button">Change</button>
+                  <button className="text-button" onClick={clearRecipient} type="button">Clear</button>
                 </div>
               </div>
-            ) : (
-              <div className="notification-recipient-picker">
-                <input
-                  aria-autocomplete="list"
-                  aria-controls="notification-recipient-results"
-                  aria-expanded={recipientPickerOpen}
-                  autoComplete="off"
-                  id="notification-recipient-search"
-                  onBlur={() => window.setTimeout(() => setRecipientPickerOpen(false), 120)}
-                  onChange={(event) => {
-                    setRecipientSearch(event.target.value);
-                    setRecipientPickerOpen(true);
-                  }}
-                  onFocus={() => setRecipientPickerOpen(true)}
-                  placeholder="Search a name, email, or role"
-                  role="combobox"
-                  type="search"
-                  value={recipientSearch}
-                />
-                {recipientPickerOpen ? (
-                  <div className="notification-recipient-results" id="notification-recipient-results" role="listbox">
-                    {recipients.loading ? <p>Loading active people…</p> : null}
-                    {recipients.error && !recipients.data ? <div className="notification-recipient-results__error"><span>Could not load active people.</span><button className="text-button" onClick={recipients.reload} type="button">Retry</button></div> : null}
-                    {!recipients.loading && !recipients.error && matchingRecipients.length === 0 ? <p>No active people match this search.</p> : null}
-                    {!recipients.loading && matchingRecipients.map((recipient) => (
-                      <button
-                        className="notification-recipient-option"
-                        key={recipient.id}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => selectRecipient(recipient)}
-                        role="option"
-                        type="button">
-                        <span className="avatar" aria-hidden="true">{recipient.firstName.charAt(0).toUpperCase() || '?'}</span>
-                        <span className="notification-recipient-option__copy"><strong>{fullName(recipient)}</strong><small>{recipient.email ?? 'No email on record'} · {humanize(recipient.role)}</small></span>
-                        <span className={`notification-recipient-token ${recipient.hasPushToken === true ? 'notification-recipient-token--ready' : recipient.hasPushToken === false ? 'notification-recipient-token--missing' : ''}`}>
-                          {recipient.hasPushToken === true ? 'Push ready' : recipient.hasPushToken === false ? 'No token' : '—'}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            )}
+            ) : null}
             {selectedRecipient?.hasPushToken === false ? <small className="notification-recipient-warning">This account has not registered a mobile push token yet. The message can be created, but it cannot reach the device until the user opens the installed app and allows notifications.</small> : null}
+            <details className="notification-recipient-advanced">
+              <summary>Use a verified user UUID instead</summary>
+              <p>For support or bulk-operation workflows only. The account is resolved before sending, so you can confirm the person and their push readiness.</p>
+              <div className="notification-recipient-uuid-row">
+                <label className="sr-only" htmlFor="notification-recipient-id">User UUID</label>
+                <input
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  id="notification-recipient-id"
+                  maxLength={36}
+                  onChange={(event) => { setRecipientIdInput(event.target.value); setRecipientLookupError(null); }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void lookupRecipientById();
+                    }
+                  }}
+                  placeholder="Paste a user UUID"
+                  spellCheck={false}
+                  value={recipientIdInput}
+                />
+                <button className="button button--secondary" disabled={lookingUpRecipient || !recipientIdInput.trim()} onClick={() => void lookupRecipientById()} type="button">{lookingUpRecipient ? 'Looking up…' : 'Find account'}</button>
+              </div>
+              {recipientLookupError ? <p className="notification-recipient-lookup-error" role="alert">{recipientLookupError}</p> : null}
+            </details>
           </div>
-          <label className="field"><span>Order ID <small>optional</small></span><input onChange={(event) => setForm((value) => ({ ...value, orderId: event.target.value }))} placeholder="Only for an order-specific update" value={form.orderId} /></label>
+          <label className="field"><span>Link to order <small>optional</small></span><input onChange={(event) => setForm((value) => ({ ...value, orderId: event.target.value }))} placeholder="Paste an order UUID only when this message relates to an order" value={form.orderId} /></label>
           <label className="field"><span>Title</span><input required maxLength={120} onChange={(event) => setForm((value) => ({ ...value, title: event.target.value }))} placeholder="Your order is on the way" value={form.title} /></label>
           <label className="field"><span>Message</span><textarea required maxLength={1000} onChange={(event) => setForm((value) => ({ ...value, body: event.target.value }))} placeholder="Your rider is nearby. We will let you know when they arrive." value={form.body} /></label>
-          <div className="notification-compose__footer"><span>Secure push delivery · retry tracking enabled</span><button className="button button--primary" disabled={sending} type="submit">{sending ? 'Queueing…' : 'Queue notification'}</button></div>
+          <div className="notification-compose__footer"><span>Recipient confirmation is required before sending.</span><button className="button button--primary" disabled={sending} type="submit">{sending ? 'Sending…' : 'Send notification'}</button></div>
         </form>
-        <aside className="content-card notification-guide">
-          <p className="eyebrow">GOOD PRACTICE</p><h2>Useful order updates</h2>
-          <div><strong>Order confirmed</strong><span>Set expectations after payment succeeds.</span></div>
-          <div><strong>Rider assigned</strong><span>Share ETA once pickup is confirmed.</span></div>
-          <div><strong>Delivery issue</strong><span>Use clear, human language and include support follow-up.</span></div>
-        </aside>
       </section>
       <section className="content-card table-card notification-history">
         <div className="notification-history__header"><div><p className="eyebrow">DELIVERY LOG</p><h2>Notification history</h2></div><div className="filter-row">{(['ALL', 'SENT', 'QUEUED', 'FAILED'] as const).map((status) => <button className={`filter-pill ${filter === status ? 'filter-pill--active' : ''}`} key={status} onClick={() => setFilter(status)} type="button">{status === 'ALL' ? 'All activity' : humanize(status)}</button>)}</div></div>

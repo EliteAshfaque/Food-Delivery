@@ -13,10 +13,14 @@ import type { schema as RelationsSchema } from '../db/relations';
 import * as schema from '../db/schema';
 import { isPostgresUniqueViolation } from '../db/is-unique-violation';
 import { CreateReviewDto } from './dto/create-review.dto';
+import { CacheService } from '../cache/cache.service';
 
 @Injectable()
 export class ReviewsService {
-  constructor(@Inject('DB') private db: NeonDatabase<typeof RelationsSchema>) {}
+  constructor(
+    @Inject('DB') private db: NeonDatabase<typeof RelationsSchema>,
+    private readonly cache: CacheService,
+  ) {}
 
   async create(customerId: string, dto: CreateReviewDto) {
     const [order] = await this.db
@@ -76,6 +80,7 @@ export class ReviewsService {
     }
 
     await this.refreshRestaurantRating(order.restaurantId);
+    await this.cache.invalidateRestaurant(order.restaurantId);
 
     return review;
   }

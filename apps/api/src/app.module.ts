@@ -20,6 +20,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { OperationsModule } from './operations/operations.module';
 import { EngagementModule } from './engagement/engagement.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { CacheModule } from './cache/cache.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { NotificationsModule } from './notifications/notifications.module';
       },
     ]),
     DbModule,
+    CacheModule,
     AuthModule,
     RestaurantsModule,
     MenuModule,

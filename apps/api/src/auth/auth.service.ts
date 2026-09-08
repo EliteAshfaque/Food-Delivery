@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
 import * as bcrypt from 'bcrypt';
 import { AccountStatus, UserRole, type JwtPayload } from '@food-delivery/types';
@@ -390,10 +390,41 @@ export class AuthService {
     const normalized = token.trim();
     if (!normalized) throw new BadRequestException('Push token is required');
 
-    await this.db
-      .update(user)
-      .set({ pushToken: `${platform}:${normalized}`, updatedAt: new Date() })
-      .where(eq(user.id, userId));
+    // `fcm:` is an explicit server-side provider marker for a native Android
+    // FCM registration token. Expo tokens intentionally have no marker and
+    // continue to use Expo's push service. Keeping the distinction in the
+    // stored value lets one deployment serve both token types safely.
+    if (normalized.startsWith('fcm:')) {
+      if (platform !== 'android') {
+        throw new BadRequestException(
+          'Direct FCM registration is currently supported for Android only',
+        );
+      }
+      if (!normalized.slice('fcm:'.length).trim()) {
+        throw new BadRequestException('FCM push token is required');
+      }
+    }
+
+    const storedToken = `${platform}:${normalized}`;
+    await this.db.transaction(async (tx) => {
+      // A physical device may sign out and then sign into another account.
+      // Serialize ownership of this exact provider token so notifications can
+      // never continue going to the previous account after that handoff.
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`push-token:${storedToken}`}))`,
+      );
+      await tx
+        .update(user)
+        .set({ pushToken: null, updatedAt: new Date() })
+        .where(and(eq(user.pushToken, storedToken), ne(user.id, userId)));
+
+      const [updated] = await tx
+        .update(user)
+        .set({ pushToken: storedToken, updatedAt: new Date() })
+        .where(eq(user.id, userId))
+        .returning({ id: user.id });
+      if (!updated) throw new BadRequestException('User not found');
+    });
 
     return { ok: true };
   }

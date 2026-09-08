@@ -561,6 +561,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .notification-hero__stats span { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; display: grid; font-size: .68rem; gap: .15rem; min-width: 88px; padding: .65rem .75rem; }
 .notification-hero__stats strong { font-size: 1.25rem; }
 .notification-layout { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1.7fr) minmax(230px, .75fr); margin-bottom: 1rem; }
+.notification-compose-only { margin-bottom: 1rem; max-width: 780px; }
 .notification-compose { display: grid; gap: .8rem; padding: 1.2rem; }
 .notification-compose h2, .notification-guide h2, .notification-history h2 { font-size: 1.05rem; margin: .2rem 0; }
 .notification-compose p:not(.eyebrow) { color: #726870; font-size: .76rem; margin: 0; }
@@ -569,6 +570,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .notification-compose__footer span { color: #187051; font-size: .72rem; font-weight: 750; }
 .notification-recipient-field { position: relative; }
 .notification-recipient-picker { position: relative; }
+.notification-recipient-search-controls { display: grid; gap: .5rem; grid-template-columns: minmax(0, 1fr) minmax(126px, .36fr); }
+.notification-recipient-search-controls input, .notification-recipient-search-controls select { background: #fffaf7; }
+.notification-recipient-help { color: #756b72; display: block; font-size: .7rem; line-height: 1.4; margin-top: .42rem; }
 .notification-recipient-results {
   background: #fff;
   border: 1px solid #e9dcd6;
@@ -577,8 +581,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: grid;
   gap: .2rem;
   left: 0;
-  margin-top: .35rem;
-  max-height: 275px;
+  margin-top: .5rem;
+  max-height: 250px;
+  min-height: 48px;
   overflow: auto;
   padding: .35rem;
   position: absolute;
@@ -586,14 +591,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   z-index: 8;
 }
 .notification-recipient-results > p { color: #756b72; font-size: .75rem; margin: .55rem; }
-.notification-recipient-results__error { align-items: center; color: #a5432b; display: flex; font-size: .75rem; gap: .5rem; justify-content: space-between; padding: .45rem; }
+.notification-recipient-results__error {
+  align-items: center;
+  background: #fff8f5;
+  border: 1px solid #f0ddd3;
+  border-radius: 11px;
+  color: #a5432b;
+  display: flex;
+  gap: .5rem;
+  font-size: .75rem;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: .55rem .75rem;
+}
 .notification-recipient-option {
   align-items: center;
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 9px;
   color: #2e2030;
-  cursor: pointer;
   display: flex;
   gap: .6rem;
   min-width: 0;
@@ -602,9 +618,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   width: 100%;
 }
 .notification-recipient-option:hover, .notification-recipient-option:focus-visible { background: #fff1ea; outline: none; }
+.notification-recipient-option--selected { background: #fff2ed; border-color: #f3cfc2; }
 .notification-recipient-option__copy { display: grid; flex: 1; gap: .08rem; min-width: 0; }
 .notification-recipient-option__copy strong { font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notification-recipient-option__copy small { color: #756b72; font-size: .69rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notification-recipient-pagination { align-items: center; border-top: 1px solid #f0e6e1; color: #756b72; display: flex; font-size: .69rem; justify-content: space-between; margin-top: .12rem; padding: .35rem .2rem .05rem; }
+.notification-recipient-pagination > div { align-items: center; display: flex; gap: .1rem; }
+.notification-recipient-pagination .text-button { font-size: .68rem; padding: .25rem .35rem; }
 .notification-recipient-selected {
   align-items: center;
   background: #fff8f5;
@@ -624,6 +644,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .notification-recipient-token--ready { background: #e4f4eb; color: #176a49; }
 .notification-recipient-token--missing { background: #fff0e9; color: #b5452b; }
 .notification-recipient-warning { color: #a5442b; display: block; font-size: .7rem; line-height: 1.45; margin-top: .45rem; }
+.notification-recipient-advanced { border-top: 1px solid #eee3df; margin-top: .7rem; padding-top: .7rem; }
+.notification-recipient-advanced summary { color: #6e4b62; font-size: .73rem; }
+.notification-recipient-advanced > p { color: #756b72; font-size: .7rem; line-height: 1.45; margin: .45rem 0 .6rem; }
+.notification-recipient-uuid-row { display: grid; gap: .5rem; grid-template-columns: minmax(0, 1fr) auto; }
+.notification-recipient-uuid-row input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; }
+.notification-recipient-lookup-error { color: #a5432b !important; font-size: .7rem !important; line-height: 1.4; margin: .5rem 0 0 !important; }
 .notification-guide { background: #fff7f3; border-color: #f6dfd5; display: grid; gap: .8rem; padding: 1.2rem; }
 .notification-guide > div { border-top: 1px solid #f1dcd2; padding-top: .7rem; }
 .notification-guide strong, .notification-guide span { display: block; }
@@ -927,7 +953,9 @@ pre { background: #2a202c; border-radius: 7px; color: #f7eff1; font-size: .6rem;
   .notification-layout { grid-template-columns: 1fr; }
   .notification-hero, .notification-history__header { align-items: flex-start; flex-direction: column; }
   .notification-recipient-selected { align-items: flex-start; flex-direction: column; }
-  .notification-recipient-selected__actions { width: 100%; justify-content: space-between; }
+  .notification-recipient-selected__actions { justify-content: space-between; width: 100%; }
+  .notification-recipient-search-controls, .notification-recipient-uuid-row { grid-template-columns: 1fr; }
+  .notification-recipient-pagination { align-items: flex-start; flex-direction: column; gap: .25rem; }
   .metric-card { min-height: 112px; }
   .toolbar { align-items: stretch; flex-direction: column; }
   .search-form { max-width: none; }

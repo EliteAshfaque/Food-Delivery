@@ -1,5 +1,6 @@
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -7,7 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import {
   OrderStatus,
@@ -22,6 +23,7 @@ import { AppIcon } from '@/components/wasil-icon-system';
 import { RequestErrorState } from '@/components/request-error-state';
 import { OrderStatusChip } from '@/components/wasil-ui-components';
 import { formatCurrency } from '@/lib/format';
+import { getApiErrorMessage } from '@/lib/api-error';
 
 type OrderItem = {
   id: string;
@@ -92,6 +94,7 @@ function sortOrders(orders: CustomerOrder[]) {
 }
 
 export default function CustomerOrdersScreen() {
+  const queryClient = useQueryClient();
   const {
     data: orders = [],
     error,
@@ -110,6 +113,36 @@ export default function CustomerOrdersScreen() {
   const activeCount = orders.filter(
     (order) => !terminalStatuses.includes(order.status),
   ).length;
+  const reorder = useMutation({
+    mutationFn: (orderId: string) =>
+      api
+        .post<CustomerOrder>(`/engagement/orders/${orderId}/reorder`, {})
+        .then((response) => response.data),
+    onSuccess: (order) => {
+      void queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+      router.push({
+        pathname: '/(customer)/(index)/oder/[id]',
+        params: { id: order.id },
+      });
+    },
+    onError: (error) => {
+      Alert.alert('Could not order again', getApiErrorMessage(error));
+    },
+  });
+
+  function confirmReorder(order: CustomerOrder) {
+    Alert.alert(
+      'Order again?',
+      `We will create the same order for ${order.deliveryAddress}. You can review and pay before it is sent.`,
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Order again',
+          onPress: () => reorder.mutate(order.id),
+        },
+      ],
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -240,6 +273,29 @@ export default function CustomerOrdersScreen() {
                   color={brand.colors.light.primary}
                 />
               </View>
+              {item.status === OrderStatus.DELIVERED ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={reorder.isPending}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    confirmReorder(item);
+                  }}
+                  style={({ pressed }) => [
+                    styles.reorderButton,
+                    reorder.isPending && styles.reorderButtonDisabled,
+                    pressed && styles.pressed,
+                  ]}>
+                  {reorder.isPending ? (
+                    <ActivityIndicator color={brand.colors.light.primary} size="small" />
+                  ) : (
+                    <>
+                      <AppIcon color={brand.colors.light.primary} name="reorder" size="sm" />
+                      <Text style={styles.reorderText}>Order again</Text>
+                    </>
+                  )}
+                </Pressable>
+              ) : null}
             </Pressable>
           );
         }}
@@ -308,6 +364,19 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.74,
   },
+  reorderButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: brand.colors.light.primarySoft,
+    borderRadius: brand.radius.pill,
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  reorderButtonDisabled: { opacity: 0.55 },
+  reorderText: { color: brand.colors.light.primary, fontSize: 13, fontWeight: '900' },
   orderTopRow: {
     alignItems: 'flex-start',
     flexDirection: 'row',

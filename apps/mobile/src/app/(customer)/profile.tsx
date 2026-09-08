@@ -195,6 +195,13 @@ export default function ProfileScreen() {
           />
           <View style={styles.divider} />
           <AccountRow
+            detail="Your go-to restaurants"
+            icon="favorites"
+            label="Favorite places"
+            onPress={() => router.push("/(customer)/favorites" as never)}
+          />
+          <View style={styles.divider} />
+          <AccountRow
             detail="Handled securely when you place an order"
             icon="paymentMethods"
             label="Payment & receipts"

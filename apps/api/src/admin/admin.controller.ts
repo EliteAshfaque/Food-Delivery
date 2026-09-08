@@ -53,6 +53,16 @@ export class AdminController {
     return this.adminService.listUsers(query);
   }
 
+  /**
+   * Resolves a known account identifier for operational tools. This keeps
+   * UUID entry out of normal workflows while still supporting support teams
+   * that receive a verified ID from another system.
+   */
+  @Get('users/:id')
+  getUser(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.getUser(id);
+  }
+
   @Post('users')
   createUser(@Request() req: AuthRequest, @Body() dto: CreateAdminUserDto) {
     return this.adminService.createUser(req.user.sub, dto);

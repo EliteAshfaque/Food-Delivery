@@ -1,56 +1,73 @@
-# Welcome to your Expo app 👋
+# Wasil Mobile App
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Expo / React Native client for customers, drivers, restaurant owners, and
+mobile administrators.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Setup
 
 ```bash
-npm run reset-project
+cp apps/mobile/.env.example apps/mobile/.env
+pnpm install
+pnpm --dir apps/api dev
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+For a physical device, set the Mac LAN IP in `apps/mobile/.env`:
 
-### Other setup steps
+```bash
+ipconfig getifaddr en0
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```env
+EXPO_PUBLIC_DEV_HOST=192.168.x.x
+```
 
-## Learn more
+## Commands
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+# Metro / Expo
+pnpm --dir apps/mobile start
+pnpm --dir apps/mobile start --clear
+pnpm --dir apps/mobile start --dev-client
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+# Native development builds
+pnpm --dir apps/mobile android
+pnpm --dir apps/mobile ios
 
-## Join the community
+# Web, lint, and typecheck
+pnpm --dir apps/mobile web
+pnpm --dir apps/mobile lint
+pnpm --dir apps/mobile exec tsc --noEmit
+```
 
-Join our community of developers creating universal apps.
+After changing maps, notifications, native permissions, `app.config.ts`, or
+Google services, rerun `android` or `ios` to rebuild and install the app.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Physical Android device
+
+1. Enable USB debugging and connect phone.
+2. Confirm it appears with `adb devices`.
+3. Install build: `pnpm --dir apps/mobile android`.
+4. Start Metro: `pnpm --dir apps/mobile start --dev-client`.
+5. Open installed Wasil app, not Expo Go.
+
+If Expo says no development build exists, install it again for that device with
+the `android` command.
+
+## iOS
+
+On macOS, install Xcode and CocoaPods, select a simulator/signed device, then:
+
+```bash
+pnpm --dir apps/mobile ios
+pnpm --dir apps/mobile start --dev-client
+```
+
+Physical iPhones require a valid Apple signing profile. APNs and Live Activity
+capabilities require a native build; they cannot be fully tested in Expo Go.
+
+## Configuration
+
+See `.env.example` for API, Stripe, Maps, Google Sign-In, EAS, and direct FCM
+variables. `EXPO_PUBLIC_ANDROID_PUSH_PROVIDER=fcm` enables direct FCM token
+registration. Test remote push only in the installed development/release app,
+not Expo Go.
