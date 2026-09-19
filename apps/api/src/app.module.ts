@@ -37,7 +37,6 @@ import { CacheModule } from './cache/cache.module';
       },
     ]),
     DbModule,
-    CacheModule,
     AuthModule,
     RestaurantsModule,
     MenuModule,
@@ -54,6 +53,7 @@ import { CacheModule } from './cache/cache.module';
     OperationsModule,
     EngagementModule,
     NotificationsModule,
+    CacheModule
   ],
   controllers: [AppController],
   providers: [AppService],
